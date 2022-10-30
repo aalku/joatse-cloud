@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+	<meta name="description" content="">
+	<meta name="author" content="">
+	<title>Please sign in</title>
+	<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@4.6.2/dist/css/bootstrap.min.css"
+		integrity="sha384-xOolHFLEh07PJGoPkLv1IbcEPTNtaed2xpHsD9ESMhqIYd0nLMwNLD69Npy4HI+N" crossorigin="anonymous">
+	<link href="https://getbootstrap.com/docs/4.0/examples/signin/signin.css" rel="stylesheet" crossorigin="anonymous">
+</head>
+
+<body>
+	<div class="container">
+		<h1 class="text-center">Welcome to Joatse Cloud</h1>
+		<br/>
+		
+		<div th:if="${loggedOut}" class="form-signin">
+			<div class="alert alert-success" role="alert">You have been signed out</div>
+		</div>
+		<div th:if="${errorMessage!=null}" class="form-signin">
+			<div th:text="${errorMessage}" class="alert alert-danger" role="alert"></div>
+		</div>
+				
+		<form th:if="${loginPasswordEnabled}" class="form-signin" method="post" action="/loginPost">
+			<h2 class="form-signin-heading">Please sign in</h2>
+			<p>
+				<label for="username" class="sr-only">Username</label>
+				<input type="text" id="username" name="username" class="form-control" placeholder="Username" required=""
+					autofocus="">
+			</p>
+			<p>
+				<label for="password" class="sr-only">Password</label>
+				<input type="password" id="password" name="password" class="form-control" placeholder="Password"
+					required="">
+			</p>
+			<button class="btn btn-lg btn-primary btn-block" type="submit">Sign in</button>
+		</form>
+		<div th:if="${oauth2Registrations.size() > 0}" class="form-signin">
+			<h2 class="form-signin-heading">Federated sign in</h2>
+			<table class="table table-striped">
+				<tbody>
+					<tr th:each="reg : ${oauth2Registrations.entrySet()}">
+						<td><a th:href="${contextPath + reg.getValue()}" th:text="${reg.getKey()}" class="btn btn-lg btn-primary btn-block"></a></td>
+					</tr>
+				</tbody>
+			</table>
+		</div>
+	</div>
+</body>
+
+</html>
