@@ -1,0 +1,20 @@
+<!DOCTYPE HTML>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head> 
+    <title>-</title> 
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+</head>
+<body>
+	<form method="post" action="/CF/2" id="form" >
+		<input type="hidden" name="hash" id="hash"/>
+	</form>
+    <script type="text/javascript">
+    	let hash = window.location.hash;
+    	if (hash.length > 2) {
+			document.getElementById('hash').value=hash;
+			document.getElementById('form').submit();
+		}
+    </script>
+
+</body>
+</html>
