@@ -56,7 +56,7 @@ public class ConfirmController {
 	 * You just logged in
 	 * @return
 	 */
-	@GetMapping(WebSecurityConfiguration.PATH_LOGGED_IN)  
+	@GetMapping("/postLogin") // FIXME // TODO  
 	public View postLogin(
 			@SessionAttribute(name = ConfirmController.CONFIRM_SESSION_KEY_HASH, required = false) HashContainer hash) {
 		if (!SecurityContextHolder.getContext().getAuthentication().isAuthenticated()) {
