@@ -5,10 +5,13 @@ import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.locks.ReentrantLock;
-import java.util.function.Consumer;
+import java.util.function.BiConsumer;
 
+import org.aalku.joatse.cloud.service.CloudTunnelService.JoatseTunnel;
 import org.aalku.joatse.cloud.tools.io.IOTools;
 import org.aalku.joatse.cloud.tools.io.WebSocketSendWorker;
 import org.slf4j.Logger;
@@ -17,12 +20,12 @@ import org.springframework.web.socket.BinaryMessage;
 import org.springframework.web.socket.WebSocketMessage;
 import org.springframework.web.socket.WebSocketSession;
 
-public class JoatseSession {
+public class JWSSession {
 
-	private Logger log = LoggerFactory.getLogger(JoatseSession.class);
+	private Logger log = LoggerFactory.getLogger(JWSSession.class);
 
 	private ReentrantLock lock = new ReentrantLock();
-	private Map<Long, TunnelTcpConnection> connectionMap = new LinkedHashMap<>();
+	private Map<Long, TunnelTcpConnection> tcpConnectionMap = new LinkedHashMap<>();
 	private WebSocketSendWorker wsSendWorker;
 
 	/**
@@ -31,12 +34,16 @@ public class JoatseSession {
 	 * I use this so the session is not directly referenced and I am tempted to do
 	 * other things with it
 	 */
-	private Consumer<String> closer;
+	private BiConsumer<String, Throwable> closer;
 
-	public JoatseSession(WebSocketSession session) {
+	private JoatseTunnel tunnel;
+
+	public JWSSession(WebSocketSession session) {
 		wsSendWorker = new WebSocketSendWorker(session);
-		this.closer = (Consumer<String>)(closeReason)->{
-			synchronized (this.closer) {
+		this.closer = (BiConsumer<String, Throwable>)(closeReason, e)->{
+			// TODO Do something with e?
+			lock.lock();
+			try {
 				if(session.isOpen()) {
 					/*
 					 * If it has a reason then someone else wanted to close it before, and we want
@@ -46,16 +53,31 @@ public class JoatseSession {
 				} else {
 					session.getAttributes().computeIfAbsent(JoatseWsHandler.SESSION_KEY_CLOSE_REASON, k->"Wanted to close it but was already closed");
 				}
+				/*
+				 * We need a copy since c.close() will update the map and we cannot iterate the
+				 * map at the same time.
+				 */
+				ArrayList<TunnelTcpConnection> copy = new ArrayList<TunnelTcpConnection>(tcpConnectionMap.values());
+				for (TunnelTcpConnection c: copy) {
+					lock.unlock(); // Unlock while closing it so we don't share the lock with anyone else
+					try {
+						c.close(e, false);
+					} finally {
+						lock.lock();
+					}
+				}
 				IOTools.runFailable(()->this.wsSendWorker.close());
 				IOTools.runFailable(()->session.close());
+			} finally {
+				lock.unlock();
 			}
 		};
 	}
 
-	void add(TunnelTcpConnection c) {
+	void addTunnelConnection(TunnelTcpConnection c) {
 		lock.lock();
 		try {
-			connectionMap.put(c.socketId, c);
+			tcpConnectionMap.put(c.socketId, c);
 		} finally {
 			lock.unlock();
 		}
@@ -66,31 +88,13 @@ public class JoatseSession {
 	}
 	
 	public void close(String reason, Throwable e) {
-		lock.lock();
-		try {
-			/*
-			 * We need a copy since c.close() will update the map and we cannot iterate the
-			 * map at the same time.
-			 */
-			ArrayList<TunnelTcpConnection> copy = new ArrayList<TunnelTcpConnection>(connectionMap.values());
-			for (TunnelTcpConnection c: copy) {
-				lock.unlock(); // Unlock while closing it so we don't share the lock with anyone else
-				try {
-					c.close(e, false);
-				} finally {
-					lock.lock();
-				}
-			}
-			wsSendWorker.close();
-		} finally {
-			lock.unlock();
-		}
+		closer.accept(reason, e);
 	}
 
 	void remove(TunnelTcpConnection c) {
 		lock.lock();
 		try {
-			connectionMap.remove(c.socketId, c);
+			tcpConnectionMap.remove(c.socketId, c);
 			c.assertClosed();
 		} finally {
 			lock.unlock();
@@ -110,7 +114,7 @@ public class JoatseSession {
 			TunnelTcpConnection c = null;
 			lock.lock();
 			try {
-				c = connectionMap.get(socketId);
+				c = tcpConnectionMap.get(socketId);
 				if (c == null) {
 					log.warn("Received ws data relating a tcp connection that was disconnected: {}", socketId);
 				}
@@ -133,6 +137,18 @@ public class JoatseSession {
 
 	public CompletableFuture<Void> sendMessage(WebSocketMessage<?> message) {
 		return wsSendWorker.sendMessage(message);
+	}
+
+	public JoatseTunnel getTunnel() {
+		return tunnel;
+	}
+
+	public void setTunnel(JoatseTunnel tunnel) {
+		this.tunnel = tunnel;
+	}
+
+	public UUID getTunnelUUID() {
+		return Optional.ofNullable(tunnel).map(t->t.getUuid()).orElse(null);
 	}
 
 }

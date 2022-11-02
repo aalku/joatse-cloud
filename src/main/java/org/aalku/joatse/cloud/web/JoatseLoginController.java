@@ -3,18 +3,17 @@ package org.aalku.joatse.cloud.web;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
+import org.aalku.joatse.cloud.service.user.JoatseUser;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.oauth2.client.registration.ClientRegistration;
 import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
 import org.springframework.security.oauth2.client.web.OAuth2AuthorizationRequestRedirectFilter;
 import org.springframework.stereotype.Controller;
-import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.ResponseBody;
-
-import jakarta.servlet.http.HttpServletRequest;
 
 @Controller
 public class JoatseLoginController implements InitializingBean {
@@ -43,7 +42,7 @@ public class JoatseLoginController implements InitializingBean {
 
 	@GetMapping("/loginForm")
 	public String login() {
-		return "login.html";
+		return "forward:login.html";
 	}
 	
 	@Override
@@ -60,4 +59,14 @@ public class JoatseLoginController implements InitializingBean {
 		}
 		// System.err.println(oauth2Registrations);
 	}
+	
+	@GetMapping("/user")
+	@ResponseBody
+	public Map<String, Object> getUser() {
+		JoatseUser user = (JoatseUser) SecurityContextHolder.getContext().getAuthentication().getPrincipal();
+		return Map.of(
+				"nameToAddress", user.getNameToAddress()
+				);
+	}
+
 }

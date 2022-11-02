@@ -2,6 +2,7 @@ package org.aalku.joatse.cloud.service.user;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -63,6 +64,15 @@ public class JoatseUser implements OAuth2User, OidcUser, UserDetails {
 		}
 	}
 
+	/** For testing and mock only */
+	@Deprecated
+	public JoatseUser(String registrationId, String principal_name) {
+		this.registrationId = registrationId;
+		this.subId = principal_name;
+		this.password = null;
+		this.principal_name = principal_name;
+	}
+
 	@Override
 	public Map<String, Object> getAttributes() {
 		return oauth2User != null ? oauth2User.getAttributes() : oidcUser != null ? oidcUser.getAttributes() : null;
@@ -115,7 +125,7 @@ public class JoatseUser implements OAuth2User, OidcUser, UserDetails {
 
 	@Override
 	public Map<String, Object> getClaims() {
-		return oidcUser != null ? oidcUser.getClaims() : null;
+		return oidcUser != null ? oidcUser.getClaims() : Collections.emptyMap();
 	}
 
 	@Override

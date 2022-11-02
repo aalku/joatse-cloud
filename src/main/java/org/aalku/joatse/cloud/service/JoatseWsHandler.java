@@ -2,15 +2,24 @@ package org.aalku.joatse.cloud.service;
 
 import java.io.IOException;
 import java.nio.channels.AsynchronousSocketChannel;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.Consumer;
+import java.util.function.BiConsumer;
+import java.util.stream.Collectors;
 
-import org.aalku.joatse.cloud.service.CloudTunnelService.ConnectionInstanceProvider;
+import org.aalku.joatse.cloud.service.CloudTunnelService.JoatseTunnel;
+import org.aalku.joatse.cloud.service.CloudTunnelService.JoatseTunnel.TcpItem;
 import org.aalku.joatse.cloud.service.CloudTunnelService.TunnelCreationResponse;
 import org.aalku.joatse.cloud.service.CloudTunnelService.TunnelCreationResult;
 import org.aalku.joatse.cloud.service.CloudTunnelService.TunnelCreationResult.Accepted;
+import org.aalku.joatse.cloud.service.CloudTunnelService.TunnelRequestTcpItem;
+import org.aalku.joatse.cloud.service.user.JoatseUser;
 import org.aalku.joatse.cloud.tools.io.IOTools;
+import org.json.JSONArray;
 import org.json.JSONObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -34,6 +43,11 @@ public class JoatseWsHandler extends AbstractWebSocketHandler implements WebSock
 	
 	@Autowired
 	private CloudTunnelService cloudTunnelService;
+	
+	/**
+	 * Map WebSocketSession.sessionId-->JWSSession
+	 */
+	private ConcurrentHashMap<String, JWSSession> wsSessionMap = new ConcurrentHashMap<String, JWSSession>();
 
 	static final String SESSION_KEY_CLOSE_REASON = "closeReason";
 
@@ -49,72 +63,74 @@ public class JoatseWsHandler extends AbstractWebSocketHandler implements WebSock
 	}
 	
 	@Override
-	public void afterConnectionEstablished(WebSocketSession session) throws Exception {
-		session.setBinaryMessageSizeLimit(MESSAGE_SIZE_LIMIT);
-		HttpHeaders handshakeHeaders = session.getHandshakeHeaders();
-		log.info("handshakeHeaders: {} - {}", session.getId(), handshakeHeaders);
-		getStateReference(session).set(State.WAITING_COMMAND);
-		session.getAttributes().put("jSession", new JoatseSession(session));
-	}
-	
-	private JoatseSession getJSession(WebSocketSession session) {
-		return (JoatseSession) session.getAttributes().get("jSession");
-	}
-
-	private UUID getUuid(WebSocketSession session) {
-		return (UUID) session.getAttributes().get("uuid");
+	public void afterConnectionEstablished(WebSocketSession wsSession) throws Exception {
+		wsSession.setBinaryMessageSizeLimit(MESSAGE_SIZE_LIMIT);
+		HttpHeaders handshakeHeaders = wsSession.getHandshakeHeaders();
+		log.info("handshakeHeaders: {} - {}", wsSession.getId(), handshakeHeaders);
+		getStateReference(wsSession).set(State.WAITING_COMMAND);
+		wsSessionMap.put(wsSession.getId(), new JWSSession(wsSession));
 	}
 	
 	@Override
-	public void afterConnectionClosed(WebSocketSession session, CloseStatus status) throws Exception {
-		log.info("Ws connection closed: {}", session.getId());
-		UUID uuid = getUuid(session);
-		if (uuid != null) {
-			log.info("Tunnel closed: {}", uuid);
-			cloudTunnelService.removeTunnel(uuid);
-			closeSession(session, "Ws was already closed", null);
+	public void afterConnectionClosed(WebSocketSession wsSession, CloseStatus status) throws Exception {
+		log.info("Ws connection closed: {}", wsSession.getId());
+		JWSSession jwsSession = wsSessionMap.remove(wsSession.getId());
+		if (jwsSession != null) {
+			UUID uuid = jwsSession.getTunnelUUID();
+			if (uuid != null) {
+				log.info("JoatseTunnel closed because WS session was closed: {}", uuid);
+				cloudTunnelService.removeTunnel(uuid);
+			}
+			closeSession(wsSession, "WS got closed", null); // This reason will be saved if it was not already closed with
+															// a previous reason
 		}
-		String closeReason = (String) session.getAttributes().getOrDefault(SESSION_KEY_CLOSE_REASON, "Closed from the client side");
+		String closeReason = (String) wsSession.getAttributes().getOrDefault(SESSION_KEY_CLOSE_REASON, "Closed from the client side");
 		log.info("Ws session was closed. Reason: {}", closeReason);
 	}
 	
 	@Override
-	protected void handleTextMessage(WebSocketSession session, TextMessage message) throws Exception {
-		AtomicReference<State> stateReference = getStateReference(session);
+	protected void handleTextMessage(WebSocketSession wsSession, TextMessage message) throws Exception {
+		AtomicReference<State> stateReference = getStateReference(wsSession);
 		if (stateReference.get() != State.WAITING_COMMAND) {
-			closeSession(session, "Protocol error: Wasn't waiting for text message", null);
+			closeSession(wsSession, "Protocol error: Wasn't waiting for text message", null);
 			return;
 		}
-		log.info("handleTextMessage: {} - {}", session.getId(), message.getPayload());
-		log.info("session.attributes.before: {} - {}", session.getId(), session.getAttributes());
+		log.info("handleTextMessage: {} - {}", wsSession.getId(), message.getPayload());
+		log.info("session.attributes.before: {} - {}", wsSession.getId(), wsSession.getAttributes());
 		try {
 			JSONObject js = new JSONObject(message.getPayload());
 			String request = js.getString("request");
 			if (request.equals("CONNECTION")) {
-				String targetHostId = js.optString("targetHostId");
-				String targetHostname = js.optString("targetHostName");
-				int targetPort = js.getInt("targetPort");
-				String targetPortDescription = js.optString("targetPortDescription");
-				TunnelCreationResponse requestedTunnel = cloudTunnelService.requestTunnel(session.getPrincipal(), session.getRemoteAddress(), targetHostId, targetHostname, targetPort, targetPortDescription);
+				
+				Collection<TunnelRequestTcpItem> tcpTunnelReqs = new ArrayList<CloudTunnelService.TunnelRequestTcpItem>();
+				for (Object o: Optional.ofNullable(js.optJSONArray("tcpTunnels")).orElseGet(()->new JSONArray())) {
+					JSONObject jo = (JSONObject) o;
+					long targetId = jo.getLong("targetId");
+					String targetDescription = jo.optString("targetDescription");
+					String targetHostname = jo.optString("targetHostName");
+					int targetPort = jo.getInt("targetPort");
+					tcpTunnelReqs.add(new TunnelRequestTcpItem(targetId, targetDescription, targetHostname, targetPort));
+				}
+				TunnelCreationResponse requestedTunnel = cloudTunnelService.requestTunnel(wsSession.getPrincipal(), wsSession.getRemoteAddress(), tcpTunnelReqs);
 				if (!requestedTunnel.result.isDone()) {
 					// Not done (not rejected nor error) so we ask the user to use the url to confirm the connection
-					getJSession(session).sendMessage((WebSocketMessage<?>) new TextMessage(showUserAcceptanceUriMessage(requestedTunnel)));
+					wsSessionMap.get(wsSession.getId()).sendMessage((WebSocketMessage<?>) new TextMessage(showUserAcceptanceUriMessage(requestedTunnel)));
 				}
 				requestedTunnel.result.whenComplete((r,e)->{
 					if (e != null) {
 						log.error("Rejected connection error: {}", e, e);
 					} else if (r.isAccepted()) {
 						Accepted acceptedTunnel = (TunnelCreationResult.Accepted)r;
-						session.getAttributes().put("uuid", acceptedTunnel.getUuid());
-						createTunnel(session, acceptedTunnel);
+						wsSession.getAttributes().put("uuid", acceptedTunnel.getUuid());
+						createTunnel(wsSession, acceptedTunnel.getTunnel());
 					} else {
 						String rejectionCause = ((TunnelCreationResult.Rejected) r).getRejectionCause();
 						log.error("Rejected connection. Cause: {}", rejectionCause);
 						try {
-							getJSession(session).sendMessage((WebSocketMessage<?>) new TextMessage(rejectionJsonMessage(rejectionCause))).get();
+							wsSessionMap.get(wsSession.getId()).sendMessage((WebSocketMessage<?>) new TextMessage(rejectionJsonMessage(rejectionCause))).get();
 						} catch (Exception e1) {
 							log.error("Exception sending text response message: {}", e, e);
-							closeSession(session, "Exception sending text response message", e);
+							closeSession(wsSession, "Exception sending text response message", e);
 						}
 					}
 				});
@@ -124,16 +140,16 @@ public class JoatseWsHandler extends AbstractWebSocketHandler implements WebSock
 			}
 		} catch (Exception e) {
 			log.error("Exception processing text message: " + e, e);
-			closeSession(session, "Exception processing text message", e);
+			closeSession(wsSession, "Exception processing text message", e);
 			return;
 		} finally {
-			log.info("session.attributes.after: {} - {}", session.getId(), session.getAttributes());
+			log.info("session.attributes.after: {} - {}", wsSession.getId(), wsSession.getAttributes());
 		}
 	}
 	
 	@Override
-	protected void handleBinaryMessage(WebSocketSession session, BinaryMessage message) throws Exception {
-		JoatseSession jSession = getJSession(session);
+	protected void handleBinaryMessage(WebSocketSession wsSession, BinaryMessage message) throws Exception {
+		JWSSession jSession = wsSessionMap.get(wsSession.getId());
 		try {
 			if (jSession == null) {
 				throw new IOException("Unexpected binary message before tunnel creation");
@@ -142,19 +158,20 @@ public class JoatseWsHandler extends AbstractWebSocketHandler implements WebSock
 			}
 		} catch (Exception e) {
 			log.error("Exception processing binary message: " + e, e);
-			closeSession(session, "Exception processing binary message", e);
+			closeSession(wsSession, "Exception processing binary message", e);
 		}
 	}
 
-	private boolean createTunnel(WebSocketSession session, Accepted acceptedTunnel) {
-		JoatseSession manager = getJSession(session);
+	private boolean createTunnel(WebSocketSession wsSession, JoatseTunnel tunnel) {
+		JWSSession jWSSession = wsSessionMap.get(wsSession.getId());
+		jWSSession.setTunnel(tunnel);
 		try {
-			ConnectionInstanceProvider listener = acceptedTunnel.getConnectionInstanceListener();
-			listener.setCallback(new Consumer<AsynchronousSocketChannel>() {
+			tunnel.setTcpConnectionConsumer(new BiConsumer<Long, AsynchronousSocketChannel>() {
 				@Override
-				public void accept(AsynchronousSocketChannel t) {
-					log.info("Connection arrived from {} for tunnel {} !!", IOTools.runUnchecked(()->t.getRemoteAddress()), acceptedTunnel.getUuid());
-					TunnelTcpConnection c = new TunnelTcpConnection(manager, t, acceptedTunnel.getTargetPort());
+				public void accept(Long targetId, AsynchronousSocketChannel t) {
+					log.info("Connection arrived from {} for tunnel {}.{} !!", IOTools.runUnchecked(()->t.getRemoteAddress()), tunnel.getUuid(), targetId);
+					TcpItem tcpItem = tunnel.getTcpItem(targetId);
+					TunnelTcpConnection c = new TunnelTcpConnection(jWSSession, t, tcpItem.targetId);
 					c.getCloseStatus().thenAccept(remote->{
 						// Connection closed ok
 						if (remote == null) {
@@ -172,27 +189,36 @@ public class JoatseWsHandler extends AbstractWebSocketHandler implements WebSock
 			});
 		} catch (Exception e2) {
 			log.error("Exception processing channel acceptance: {}", e2, e2);
-			closeSession(session, "Exception processing channel acceptance", e2);
+			closeSession(wsSession, "Exception processing channel acceptance", e2);
 			return false;
 		}
-		log.info("Tunnel was succesfully created!!");
+		log.info("JoatseTunnel was succesfully created!!");
 		try {
-			manager.sendMessage((WebSocketMessage<?>) new TextMessage(runningTunnelMessage(acceptedTunnel))).get();
-			getStateReference(session).set(State.RUNNING); // Allow to process connections
+			jWSSession.sendMessage((WebSocketMessage<?>) new TextMessage(runningTunnelMessage(tunnel))).get();
+			getStateReference(wsSession).set(State.RUNNING); // Allow to process connections
 		} catch (Exception e1) {
 			log.error("Exception sending text response message: {}", e1, e1);
-			closeSession(session, "Exception sending text response message", e1);
+			closeSession(wsSession, "Exception sending text response message", e1);
 			return false;
 		}
 		return true;
 	}
 
-	private CharSequence runningTunnelMessage(Accepted acceptedTunnel) {
+	private CharSequence runningTunnelMessage(JoatseTunnel tunnel) {
+		String cloudPublicHostname = tunnel.getCloudPublicHostname();
 		JSONObject res = new JSONObject();
 		res.put("request", "CONNECTION");
 		res.put("response", "RUNNING");
-		res.put("listenHost", acceptedTunnel.getPublicAddress().getHostString());
-		res.put("listenPort", acceptedTunnel.getPublicAddress().getPort());
+		Collection<JSONObject> ports = new ArrayList<>();
+		for (TcpItem i: tunnel.getTcpItems()) {
+			JSONObject j = new JSONObject();
+			j.put("listenHost", cloudPublicHostname);
+			j.put("listenPort", i.listenPort);
+			j.put("targetHostname", i.targetHostname);
+			j.put("targetPort", i.targetPort);
+			ports.add(j);
+		}
+		res.put("tcpListenPorts", ports);
 		return res.toString();
 	}
 
@@ -213,12 +239,19 @@ public class JoatseWsHandler extends AbstractWebSocketHandler implements WebSock
 	}
 
 	/** Close session */
-	private void closeSession(WebSocketSession session, String reason, Throwable e) {
-		synchronized (session) {
-			getStateReference(session).set(State.CLOSED);
-			getJSession(session).close(reason, e);
-			IOTools.runFailable(()->session.close());
+	private void closeSession(WebSocketSession wsSession, String reason, Throwable e) {
+		synchronized (wsSession) {
+			getStateReference(wsSession).set(State.CLOSED);
+			Optional.ofNullable(wsSessionMap.get(wsSession.getId()))
+					.ifPresent(s -> IOTools.runFailable(() -> s.close(reason, e)));
+			IOTools.runFailable(()->wsSession.close());
 		}
+	}
+	
+	public Collection<JWSSession> getSessions(JoatseUser owner) {
+		return wsSessionMap.values().stream().filter(
+				s -> Optional.ofNullable(s.getTunnel()).map(t -> t.getOwner()).map(o -> o.equals(owner)).orElse(false))
+				.collect(Collectors.toList());
 	}
 		
 }

@@ -116,10 +116,11 @@ public class WebSecurityConfiguration {
 			}
 		};
 		http.csrf().disable()
-			.authorizeRequests()
-				.antMatchers(WebSocketConfig.CONNECTION_HTTP_PATH).anonymous()
-				.antMatchers(PATH_LOGIN_FORM, PATH_LOGIN_FORM + "/**", PATH_LOGIN_POST).permitAll()
-				.antMatchers("/CF", "/CF/2").permitAll()
+			.authorizeHttpRequests()
+				.requestMatchers(WebSocketConfig.CONNECTION_HTTP_PATH).anonymous()
+				.requestMatchers(PATH_LOGIN_FORM, PATH_LOGIN_FORM + "/**", PATH_LOGIN_POST).permitAll()
+				.requestMatchers("/css/*.css").permitAll()
+				.requestMatchers("/CF", "/CF/2").permitAll()
 				.anyRequest().fullyAuthenticated()
         	.and()
         	.formLogin(c->{

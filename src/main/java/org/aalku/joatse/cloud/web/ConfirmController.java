@@ -2,7 +2,11 @@ package org.aalku.joatse.cloud.web;
 
 import java.io.Serializable;
 import java.net.InetAddress;
+import java.net.UnknownHostException;
 import java.time.Instant;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.Stream;
@@ -10,7 +14,7 @@ import java.util.stream.Stream;
 import org.aalku.joatse.cloud.config.WebListenerConfigurationDetector;
 import org.aalku.joatse.cloud.config.WebSecurityConfiguration;
 import org.aalku.joatse.cloud.service.CloudTunnelService;
-import org.aalku.joatse.cloud.service.CloudTunnelService.TunnelDefinition;
+import org.aalku.joatse.cloud.service.CloudTunnelService.JoatseTunnel;
 import org.aalku.joatse.cloud.service.CloudTunnelService.TunnelRequest;
 import org.aalku.joatse.cloud.service.user.JoatseUser;
 import org.slf4j.Logger;
@@ -100,10 +104,11 @@ public class ConfirmController {
 	
 	/**
 	 * Logged in and with hash
+	 * @throws UnknownHostException 
 	 */
 	@GetMapping("/CF/A")  
 	public String confirm3(Model model, HttpServletRequest request,
-			@SessionAttribute(name = ConfirmController.CONFIRM_SESSION_KEY_HASH, required = true) HashContainer hashContainer) {
+			@SessionAttribute(name = ConfirmController.CONFIRM_SESSION_KEY_HASH, required = true) HashContainer hashContainer) throws UnknownHostException {
 		//log.info("confirm3");
 		request.getSession(false).removeAttribute(CONFIRM_SESSION_KEY_HASH);
 		if (!SecurityContextHolder.getContext().getAuthentication().isAuthenticated()) {
@@ -116,10 +121,11 @@ public class ConfirmController {
 				.getTunnelRequest(UUID.fromString(hashContainer.hash.replaceFirst("^#+", "")));
 		if (tunnelRequest != null) {
 			String allowedAddress = request.getRemoteAddr();
-			tunnelRequest.setAllowedAddress(allowedAddress);
+			List<InetAddress> addresses = Arrays.asList(InetAddress.getAllByName(allowedAddress));
+			tunnelRequest.setAllowedAddress(addresses);
 			model.addAttribute("hash", hashContainer.hash);
 			model.addAttribute("tunnelRequest", tunnelRequest);
-			model.addAttribute("allowedAddress", formatAllowedAddress(allowedAddress));
+			model.addAttribute("allowedAddress", formatAllowedAddress(addresses));
 			model.addAttribute("uuid", tunnelRequest.getUuid().toString());
 		}
 		return "cf3.html";
@@ -139,7 +145,7 @@ public class ConfirmController {
 	
 	@GetMapping("/viewTunnel")
 	public String viewTunnel(Model model, @RequestParam(name = "uuid") String sUuid) {
-		TunnelDefinition tunnel = cloudTunnelService.getTunnel(UUID.fromString(sUuid));
+		JoatseTunnel tunnel = cloudTunnelService.getTunnel(UUID.fromString(sUuid));
 		Authentication auth = SecurityContextHolder.getContext().getAuthentication();
 		if (tunnel != null && auth.getPrincipal().equals(tunnel.getOwner())) {
 			model.addAttribute("uuid", sUuid);
@@ -151,24 +157,26 @@ public class ConfirmController {
 	}
 
 
-	private String formatAllowedAddress(String allowedAddress) {
-		String allowedHostname = reverseDns(allowedAddress);
-		if (!allowedAddress.equalsIgnoreCase(allowedHostname)) {
-			allowedAddress += " / (" + allowedHostname + ")";
+	private String formatAllowedAddress(Collection<InetAddress> collection) {
+		StringBuilder sb = new StringBuilder();
+		for (InetAddress a: collection) {
+			if (sb.length() > 0) {
+				sb.append(", ");
+			}
+			sb.append(a);
+			String allowedHostname = reverseDns(a);
+			sb.append("/").append(allowedHostname);
 		}
-		return allowedAddress;
+		return sb.toString();
 	}
 
 
-	private String reverseDns(String remoteAddr) {
+	private String reverseDns(InetAddress address) {
 		try {
-			InetAddress address = InetAddress.getByName(remoteAddr);
 			String hostName = address.getHostName();
-			if (hostName.equalsIgnoreCase(remoteAddr)) {
-				Optional<InetAddress> o = Stream.of(InetAddress.getAllByName("localhost")).filter(x->x.equals(address)).findAny();
-				if (o.isPresent()) {
-					return "localhost";
-				}
+			Optional<InetAddress> o = Stream.of(InetAddress.getAllByName("localhost")).filter(x->x.equals(address)).findAny();
+			if (o.isPresent()) {
+				return "localhost";
 			}
 			return hostName;
 		} catch (Exception e) {

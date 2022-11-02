@@ -32,30 +32,31 @@ public class TunnelTcpConnection {
 	private static final int MAX_HEADER_SIZE_BYTES = 50;
 	private static final int DATA_BUFFER_SIZE = 1024 * 63;
 
-	private Logger log = LoggerFactory.getLogger(TunnelTcpConnection.class);
+	private final Logger log = LoggerFactory.getLogger(TunnelTcpConnection.class);
 
-	private JoatseSession jSession;
-	private AsynchronousSocketChannel tcp;
-	long socketId = new Random().nextLong();
-	private int targetPort;
-	private CRC32 dataCRCT2W = new CRC32();
-	private CRC32 dataCRCW2T = new CRC32();	
-	private CompletableFuture<Boolean> closeStatus = new CompletableFuture<>();
-	private CompletableFuture<Void> connectionToFinalTargetResult = new CompletableFuture<Void>();
+	private final JWSSession jSession;
+	private final AsynchronousSocketChannel tcp;
+	/** Socket instance random id */
+	public final long socketId = new Random().nextLong() & Long.MAX_VALUE;
+	public final long targetId;
+	private final CRC32 dataCRCT2W = new CRC32();
+	private final CRC32 dataCRCW2T = new CRC32();	
+	private final CompletableFuture<Boolean> closeStatus = new CompletableFuture<>();
+	private final CompletableFuture<Void> connectionToFinalTargetResult = new CompletableFuture<Void>();
 
-	public TunnelTcpConnection(JoatseSession jSession, AsynchronousSocketChannel tcp, int targetPort) {
+	public TunnelTcpConnection(JWSSession jSession, AsynchronousSocketChannel tcp, long targetId) {
 		this.jSession = jSession;
 		this.tcp = tcp;
-		this.targetPort = targetPort;
+		this.targetId = targetId;
 		this.closeStatus.whenComplete((r,e)->jSession.remove(this));
-		jSession.add(this);
+		jSession.addTunnelConnection(this);
 
 		ByteBuffer buffer = ByteBuffer.allocate(MAX_HEADER_SIZE_BYTES + DATA_BUFFER_SIZE);
 		
-		sendNewSocketMessage(buffer) // Send header, then ...
-			.thenCompose(x->connectionToFinalTargetResult.exceptionallyCompose(e->{
+		sendNewSocketMessage(buffer, targetId) // Send header, then ...
+			.thenCompose((Void x)->connectionToFinalTargetResult.exceptionally(e->{
 				log.error("Error connecting to to final target: " + e);
-				return CompletableFuture.failedStage(e);
+				throw new RuntimeException("Error connecting to to final target: " + e, e);
 			}))
 			.thenAccept(x->{
 					tcpToWs(buffer); // start copying from WS to TCP
@@ -78,7 +79,7 @@ public class TunnelTcpConnection {
 		if (connected) {
 			connectionToFinalTargetResult.complete(null);
 		} else {
-			connectionToFinalTargetResult.completeExceptionally(new IOException("Can't connect to final target: " + targetPort));
+			connectionToFinalTargetResult.completeExceptionally(new IOException("Can't connect to final targetId: " + targetId));
 		}
 	}
 
@@ -138,9 +139,9 @@ public class TunnelTcpConnection {
 		return res;
 	}
 
-	private CompletableFuture<Void> sendNewSocketMessage(ByteBuffer buffer) {
+	private CompletableFuture<Void> sendNewSocketMessage(ByteBuffer buffer, long targetId) {
 		writeSocketHeader(buffer, MESSAGE_TYPE_NEW_TCP_SOCKET);
-		buffer.putShort((short) this.targetPort);
+		buffer.putLong(targetId);
 		buffer.flip();
 		return sendMessage(new BinaryMessage(buffer, true));
 	}
