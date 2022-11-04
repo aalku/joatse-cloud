@@ -140,23 +140,9 @@ public class ConfirmController {
 		}
 		UUID uuid = UUID.fromString(sUuid);
 		cloudTunnelService.acceptTunnelRequest(uuid, (JoatseUser) auth.getPrincipal());
-		return viewTunnel(model, sUuid);
+		return "redirect:/";
 	}
 	
-	@GetMapping("/viewTunnel")
-	public String viewTunnel(Model model, @RequestParam(name = "uuid") String sUuid) {
-		JoatseTunnel tunnel = cloudTunnelService.getTunnel(UUID.fromString(sUuid));
-		Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-		if (tunnel != null && auth.getPrincipal().equals(tunnel.getOwner())) {
-			model.addAttribute("uuid", sUuid);
-			model.addAttribute("tunnel", tunnel);
-			model.addAttribute("allowedAddress", formatAllowedAddress(tunnel.getAllowedAddress()));
-			model.addAttribute("cloudPublicHostname", webListenerConfiguration.getPublicHostname());
-		}
-		return "viewTunnel.html";
-	}
-
-
 	private String formatAllowedAddress(Collection<InetAddress> collection) {
 		StringBuilder sb = new StringBuilder();
 		for (InetAddress a: collection) {

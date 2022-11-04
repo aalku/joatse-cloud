@@ -117,14 +117,17 @@ public class JoatseWsHandler extends AbstractWebSocketHandler implements WebSock
 					wsSessionMap.get(wsSession.getId()).sendMessage((WebSocketMessage<?>) new TextMessage(showUserAcceptanceUriMessage(requestedTunnel)));
 				}
 				requestedTunnel.result.whenComplete((r,e)->{
-					if (e != null) {
-						log.error("Rejected connection error: {}", e, e);
-					} else if (r.isAccepted()) {
+					if (e == null && r != null && r.isAccepted()) {
 						Accepted acceptedTunnel = (TunnelCreationResult.Accepted)r;
 						wsSession.getAttributes().put("uuid", acceptedTunnel.getUuid());
 						createTunnel(wsSession, acceptedTunnel.getTunnel());
 					} else {
-						String rejectionCause = ((TunnelCreationResult.Rejected) r).getRejectionCause();
+						String rejectionCause;
+						if (e != null) {
+							rejectionCause = e.getMessage();
+						} else {
+							rejectionCause = ((TunnelCreationResult.Rejected) r).getRejectionCause();
+						}
 						log.error("Rejected connection. Cause: {}", rejectionCause);
 						try {
 							wsSessionMap.get(wsSession.getId()).sendMessage((WebSocketMessage<?>) new TextMessage(rejectionJsonMessage(rejectionCause))).get();

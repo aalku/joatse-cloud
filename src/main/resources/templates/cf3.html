@@ -34,20 +34,23 @@
 				<input class="form-control" type="text" id="creationTime" th:value="*{creationTime}"
 					disabled="disabled" />
 			</div>
-			<div class="form-group" th:if="*{!targetHostId.isEmpty()}">
-				<label for="targetHostId">Connection target host description</label>
-				<input class="form-control" type="text" id="targetHostId" th:value="*{targetHostId}"
-					disabled="disabled" />
-			</div>
-			<div class="form-group">
-				<label for="targetPort">Connection target port</label>
-				<input class="form-control" type="text" id="targetPort" th:value="*{targetPort}"
-					disabled="disabled" />
-			</div>
-			<div class="form-group" th:if="*{targetPortDescription != null && !targetPortDescription.isEmpty()}">
-				<label for="targetPortDescription">Connection target port description</label>
-				<input class="form-control" type="text" id="targetPortDescription" th:value="*{targetPortDescription}"
-					disabled="disabled" />
+			<div class="form-group" th:each="item,it: ${tunnelRequest.items}">
+				<h4 th:if="${tunnelRequest.items.size > 1}" th:text="|Tunnel item ${it.index + 1}|"></h4>
+				<div class="form-group" th:if="${item.targetDescription != null && !item.targetDescription.isEmpty()}">
+					<label for="targetDescription">Target description</label>
+					<input class="form-control" type="text" id="targetDescription" th:value="${item.targetDescription}"
+						disabled="disabled" />
+				</div>
+				<div class="form-group">
+					<label for="targetHostname">Target host</label>
+					<input class="form-control" type="text" id="targetHostname" th:value="${item.targetHostname}"
+						disabled="disabled" />
+				</div>
+				<div class="form-group">
+					<label for="targetPort">Target port</label>
+					<input class="form-control" type="text" id="targetPort" th:value="${item.targetPort}"
+						disabled="disabled" />
+				</div>
 			</div>
 		</form>
 		<h3>Acceptance</h3>

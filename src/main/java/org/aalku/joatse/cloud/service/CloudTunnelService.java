@@ -126,7 +126,7 @@ public class CloudTunnelService implements InitializingBean, DisposableBean {
 
 	public static class JoatseTunnel {
 
-		class TcpItem {
+		public class TcpItem {
 			public final int listenPort;
 			/**
 			 * Random target port id, to id target tuple [host, port]
@@ -393,23 +393,32 @@ public class CloudTunnelService implements InitializingBean, DisposableBean {
 	 */
 	public void acceptTunnelRequest(UUID uuid, JoatseUser user) {
 		log.info("JoatseUser accepted tunnel request: {}", uuid);
-		TunnelRequest request;
-		lock.writeLock().lock();
+		TunnelRequest request = null;
 		TunnelCreationResult.Accepted newTunnel;
 		try {
-			request = tunnelRequestMap.remove(uuid);
-			if (request == null) {
-				log.warn("It was accepted a request that was not waiting for acceptance: {}", uuid);
-				return;
-			}
+			lock.writeLock().lock();
+			try {
+				request = tunnelRequestMap.remove(uuid);
+				if (request == null) {
+					log.warn("It was accepted a request that was not waiting for acceptance: {}", uuid);
+					return;
+				}
 
-			// Connect listeners
-			JoatseTunnel tunnel = registerTunnel(user, request);
-			newTunnel = new TunnelCreationResult.Accepted(request, tunnel);
-		} finally {
-			lock.writeLock().unlock();
+				// Connect listeners
+				JoatseTunnel tunnel = registerTunnel(user, request);
+				newTunnel = new TunnelCreationResult.Accepted(request, tunnel);
+			} finally {
+				lock.writeLock().unlock();
+			}
+			request.future.complete(newTunnel); // Without lock
+		} catch (Exception e) {
+			if (request != null) {
+				request.future.completeExceptionally(e);
+				return;
+			} else {
+				throw e;
+			}
 		}
-		request.future.complete(newTunnel); // Without lock
 	}
 
 	private JoatseTunnel registerTunnel(JoatseUser owner, TunnelRequest request) {

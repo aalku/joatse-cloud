@@ -12,25 +12,83 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@braid/vue-formulate@2.5.3/dist/snow.min.css">
 	<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@4.6.2/dist/css/bootstrap.min.css"
 		integrity="sha384-xOolHFLEh07PJGoPkLv1IbcEPTNtaed2xpHsD9ESMhqIYd0nLMwNLD69Npy4HI+N" crossorigin="anonymous">
+	<script src="https://cdn.jsdelivr.net/npm/jquery@3.5.1/dist/jquery.slim.min.js"
+		integrity="sha384-DfXdz2htPH0lsSSs5nCTpuj/zy4C+OGpamoFVy38MVBnE+IbbVYUew+OrCXaRkfj"
+		crossorigin="anonymous"></script>
+	<script src="https://cdn.jsdelivr.net/npm/bootstrap@4.6.2/dist/js/bootstrap.bundle.min.js"
+		integrity="sha384-Fy6S3B9q64WdZWQUiU+q4/2Lc9npb8tCaSX9FK7E8HnRr0Jz8D6OP9dO5Vg3Q9ct"
+		crossorigin="anonymous"></script>
 </head>
 <body>
 <div class="container" id="app">
     <div class="row"><div class="col"></div><div class="col-4 text-right">{{user.nameToAddress}} (<a href="/logout">Log out</a>)</div></div>
 	<h1 class="text-center">Welcome to Joatse Cloud</h1>
 	<br/>
+	<h2>Your current sessions</h2>
+	<div class="accordion" id="accordionSessions">
+		<div class="card" v-for="(s, iS) in sessions.sessions">
+			<div class="card-header" :id="'sessionHead'+iS">
+		        <button class="btn btn-link btn-block text-left collapsed" type="button" data-toggle="collapse" :data-target="'#session'+iS" aria-expanded="false" :aria-controls="'session'+iS">
+					<h3>Session from {{s.requesterAddress}}</h3>
+		        </button>
+			</div>
+			<div :id="'session'+iS" :class="'collapse' + ((iS+1)==sessions.sessions.length ? ' last' : '')" :aria-labelledby="'sessionHead'+iS" data-parent="#accordionSessions">
+				<div class="card-body">
+					<form>
+						<div class="form-group">
+							<label for="creationTime">Request creation time</label>
+							<input class="form-control" type="text" id="creationTime" v-model="s.creationTime"
+								disabled="disabled" />
+						</div>
+						<div class="form-group">
+							<label for="allowedAddress">Allowed IP address</label>
+							<input class="form-control" type="text" id="allowedAddress" v-model="s.allowedAddress"
+								disabled="disabled" />
+						</div>
+						<div v-for="(tcp, iTcp) in s.tcpItems">
+							<div class="form-group">
+								<label for="target">TCP Socket listening<span v-if="tcp.targetDescription"> -
+										{{tcp.targetDescription}}</span></label>
+								<input class="form-control" type="text" id="target" v-model="tcp.description"
+									disabled="disabled" />
+							</div>
+						</div>
+					</form>
+				</div>
+			</div>
+		</div>
+	</div>
 </div>
 <script>
 new Vue({
         el: "#app",
         data: {
-			user:null
+			user:{},
+			sessions:{sessions:[]}
         },
         // define methods under the `methods` object
         methods: {
         },
 		async created() {
-	        await fetch('/user').then(response => response.json())
-        			.then((data) => this.user = data);
+			let loadData = async ()=> {
+		        await fetch('/user').then(response => response.json())
+	        			.then((data) => this.user = data);
+		        await fetch('/sessions').then(response => response.json())
+	        			.then((data) => {
+							this.sessions.sessions = data.sessions.map(s=>{
+								s.requesterHostname = s.requesterAddress.split(':')[0];
+								s.creationTime = new Date(Date.parse(s.creationTime)).toUTCString();
+								s.tcpItems = s.tcpItems.map(tcp=>{
+									tcp.description = tcp.listenHostname + ':' + tcp.listenPort + ' --> [' + s.requesterHostname + '] --> ' + tcp.targetHostname + ':' + tcp.targetPort;
+									return tcp;
+								});
+								return s;
+							});
+						});
+        	}
+        	await loadData();
+			await $('.collapse.last').collapse('show');
+			setInterval(()=>loadData(), 5000);
 		}
     });
 </script>
