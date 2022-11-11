@@ -8,9 +8,7 @@ Joatse project intends to create an open source tunneling solution to share priv
 
 It's designed for sysadmins and software developers to access resources they already have access to but quickly and as easy as possible. Also they must be able to give access to other selected people.
 
-Right now you can share access to any TCP port that is accessible to you but in the future we would like to be able to share UDP ports, files, folders and we intentd to have specific support for http(s).
-
-With the current version you can share http and https they runs over TCP but you might have all kinds of problems with https certificates as the cloud hostname will not be the same as the one on the SSL certificate. In order to solve it we intend to support https behaving like a proxy, in a future version.
+Right now you can share access to any TCP port that is accessible to you and any http(s) resource but in the future we would like to be able to share UDP ports, files, folders and maybe other resources.
 
 ## How to use it
 
@@ -38,8 +36,11 @@ It just started working so it isn't beautiful, it might crash and the functional
 
 You can find the client software [here](https://github.com/aalku/joatse-target).
 
+Http(s) is shared with a reverse proxy that doesn't rewrite any content so you probably can't share many web apps as many of them have absolute URLs, several subdomains and cors. It can share many simple pages, web apps designed to work behind a proxy and any APIs but maybe not with absolute URLs that you must follow, like pagination links.
+
+I might add some rewrite rules and the possibility to use your own.
+
 There's a lot of work ahead. We need to create use guides a better web interface and a lot of improvements.
-We need specific support for https and better support (maybe safer) for http.
 
 The server has a prototype of user system but it currently generates a random admin password that's not even stored anywhere so it's random again on every restart and you have to search for it in the server logs. But if you register your server in Google APIs then you can log in with your Google account too.
 
