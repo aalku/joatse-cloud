@@ -1,18 +1,16 @@
 package org.aalku.joatse.cloud.service;
 
-import java.io.IOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.net.URL;
 import java.net.UnknownHostException;
-import java.nio.channels.AsynchronousServerSocketChannel;
 import java.nio.channels.AsynchronousSocketChannel;
-import java.nio.channels.CompletionHandler;
 import java.security.Principal;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
-import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -22,22 +20,28 @@ import java.util.Random;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
-import org.aalku.joatse.cloud.config.WebListenerConfigurationDetector;
+import org.aalku.joatse.cloud.config.ListenerConfigurationDetector;
 import org.aalku.joatse.cloud.config.WebSocketConfig;
+import org.aalku.joatse.cloud.service.CloudTunnelService.JoatseTunnel.TcpTunnel;
+import org.aalku.joatse.cloud.service.HttpProxy.HttpTunnel;
 import org.aalku.joatse.cloud.service.user.JoatseUser;
+import org.aalku.joatse.cloud.tools.io.AsyncTcpPortListener;
+import org.aalku.joatse.cloud.tools.io.AsyncTcpPortListener.Event;
 import org.aalku.joatse.cloud.tools.io.IOTools;
+import org.aalku.joatse.cloud.tools.io.PortRange;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.DisposableBean;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.util.UriComponentsBuilder;
@@ -77,6 +81,15 @@ public class CloudTunnelService implements InitializingBean, DisposableBean {
 	public static class TunnelRequestTcpItem extends TunnelRequestItem {
 		public TunnelRequestTcpItem(long targetId, String targetDescription, String targetHostname, int targetPort) {
 			super(targetId, targetDescription, targetHostname, targetPort);
+		}
+	}
+	
+	public static class TunnelRequestHttpItem extends TunnelRequestItem {
+		public final URL targetUrl;
+		public TunnelRequestHttpItem(long targetId, String targetDescription, URL targetUrl) {
+			super(targetId, targetDescription, targetUrl.getHost(),
+					Optional.of(targetUrl.getPort()).map(p -> p <= 0 ? targetUrl.getDefaultPort() : p).get());
+			this.targetUrl = targetUrl;
 		}
 	}
 
@@ -126,7 +139,7 @@ public class CloudTunnelService implements InitializingBean, DisposableBean {
 
 	public static class JoatseTunnel {
 
-		public class TcpItem {
+		public class TcpTunnel {
 			public final int listenPort;
 			/**
 			 * Random target port id, to id target tuple [host, port]
@@ -135,7 +148,7 @@ public class CloudTunnelService implements InitializingBean, DisposableBean {
 			public final String targetDescription;
 			public final String targetHostname;
 			public final int targetPort;
-			public TcpItem(int listenPort, TunnelRequestTcpItem req) {
+			public TcpTunnel(int listenPort, TunnelRequestTcpItem req) {
 				this.targetId = req.targetId;
 				this.listenPort = listenPort;
 				this.targetDescription = req.targetDescription;
@@ -153,8 +166,12 @@ public class CloudTunnelService implements InitializingBean, DisposableBean {
 		private Collection<InetAddress> allowedAddress;
 		private final InetSocketAddress requesterAddress;
 		private final Instant creationTime;
+		/**
+		 * Handler for tcp or http(s) connections that are handled as tcp at this point
+		 */
 		private BiConsumer<Long, AsynchronousSocketChannel> tcpConnectionListener;
-		private Collection<TcpItem> tcpItems = new ArrayList<CloudTunnelService.JoatseTunnel.TcpItem>(1);
+		private Collection<TcpTunnel> tcpItems = new ArrayList<>(1);
+		private Collection<HttpTunnel> httpItems = new ArrayList<>(1);
 
 		public JoatseTunnel(JoatseUser owner, TunnelRequest request, String cloudPublicHostname) {
 			this.owner = owner;
@@ -189,22 +206,46 @@ public class CloudTunnelService implements InitializingBean, DisposableBean {
 			return owner;
 		}
 
-		public TcpItem addTcpItem(int port, TunnelRequestTcpItem r) {
-			TcpItem i = new TcpItem(port, r);
+		public void addTcpItem(int port, TunnelRequestTcpItem r) {
+			TcpTunnel i = new TcpTunnel(port, r);
 			tcpItems.add(i);
-			return i;
 		}
 
-		public TcpItem getTcpItem(long targetId) {
+		public void addHttpItem(HttpTunnel item) {
+			httpItems.add(item);
+		}
+
+		public TcpTunnel getTcpItem(long targetId) {
 			return getTcpItems().stream().filter(i->i.targetId==targetId).findAny().orElse(null);
 		}
 
-		public Collection<TcpItem> getTcpItems() {
+		public Collection<TcpTunnel> getTcpItems() {
 			return tcpItems;
 		}
 
 		public String getCloudPublicHostname() {
 			return cloudPublicHostname;
+		}
+
+		public Collection<HttpTunnel> getHttpItems() {
+			return httpItems;
+		}
+
+		public HttpTunnel getHttpItem(long targetId) {
+			return getHttpItems().stream().filter(i->i.getTargetId()==targetId).findAny().orElse(null);
+		}
+
+		/**
+		 * Create a tunneled tcp connection.
+		 * 
+		 * It can tunnel tcp tunnels or other tunnels running over tcp so targetId might
+		 * or might not represent a tcpTunnel.
+		 * 
+		 * @param targetId
+		 * @param channel
+		 */
+		public void tunnelTcpConnection(long targetId, AsynchronousSocketChannel channel) {
+			tcpConnectionListener.accept(targetId, channel);
 		}
 	}
 
@@ -290,17 +331,21 @@ public class CloudTunnelService implements InitializingBean, DisposableBean {
 
 	private ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
 
-	@Value("${cloud.port.open.range:}")
-	private String openPortRangeString;
-
-	private int openPortMin;
-	private int openPortMax;
-
 	@Value("${server.hostname.listen:0.0.0.0}")
 	private String listenHostname;
 
 	@Autowired
-	private WebListenerConfigurationDetector webListenerConfiguration;
+	private ListenerConfigurationDetector webListenerConfiguration;
+
+	@Qualifier("openPortRange")
+	@Autowired
+	public PortRange openPortRange;
+	
+	@Autowired
+	private HttpProxy httpProxy;
+
+	@Autowired
+	private TunnelRegistry tunnelRegistry;
 
 	private final AtomicBoolean shuttingDown = new AtomicBoolean(false);
 
@@ -308,16 +353,12 @@ public class CloudTunnelService implements InitializingBean, DisposableBean {
 	 * Map of open server sockets. Remember there can be several connections from
 	 * different users on the same port.
 	 */
-	private Map<Integer, AsynchronousServerSocketChannel> openPortMap = new LinkedHashMap<>();
+	private Map<Integer, AsyncTcpPortListener<Void>> openPortMap = new LinkedHashMap<>();
 
 	/**
 	 * Requested connections not confirmed yet
 	 */
 	Map<UUID, TunnelRequest> tunnelRequestMap = new LinkedHashMap<>();
-
-	Map<UUID, JoatseTunnel> tunnelMap = new LinkedHashMap<>();
-
-	Map<Integer, List<JoatseTunnel.TcpItem>> tcpTunnelsByPortMap = new LinkedHashMap<>();
 
 	/**
 	 * For easier testing of target only. FIXME remove this.
@@ -337,12 +378,13 @@ public class CloudTunnelService implements InitializingBean, DisposableBean {
 	 * @param targetPortDescription
 	 * @return
 	 */
-	public TunnelCreationResponse requestTunnel(Principal principal, InetSocketAddress connectionRequesterAddress, Collection<TunnelRequestTcpItem> tcpTunnels) {
+	public TunnelCreationResponse requestTunnel(Principal principal, InetSocketAddress connectionRequesterAddress, Collection<TunnelRequestTcpItem> tcpTunnels, Collection<TunnelRequestHttpItem> httpTunnels) {
 		lock.writeLock().lock();
 		TunnelRequest request;
 		try {
 			Collection<TunnelRequestItem> items = new ArrayList<CloudTunnelService.TunnelRequestItem>();
 			items.addAll(tcpTunnels);
+			items.addAll(httpTunnels);
 			request = new TunnelRequest(connectionRequesterAddress, items);
 			tunnelRequestMap.put(request.uuid, request);
 		} finally {
@@ -373,20 +415,6 @@ public class CloudTunnelService implements InitializingBean, DisposableBean {
 		return ub.toUriString() + "?ts=" + System.currentTimeMillis() + "#" + request.uuid;
 	}
 
-	public void removeTunnel(UUID uuid) {
-		lock.writeLock().lock();
-		try {
-			JoatseTunnel td = tunnelMap.remove(uuid);
-			if (td != null) {
-				for (JoatseTunnel.TcpItem i: td.getTcpItems()) {
-					tcpTunnelsByPortMap.get(i.listenPort).remove(i);
-				}
-			}
-		} finally {
-			lock.writeLock().unlock();
-		}
-	}
-
 	/**
 	 * The user accepted this connection and completed it with any needed
 	 * parameters.
@@ -413,6 +441,7 @@ public class CloudTunnelService implements InitializingBean, DisposableBean {
 			request.future.complete(newTunnel); // Without lock
 		} catch (Exception e) {
 			if (request != null) {
+				// Reject
 				request.future.completeExceptionally(e);
 				return;
 			} else {
@@ -441,10 +470,31 @@ public class CloudTunnelService implements InitializingBean, DisposableBean {
 		tunnel = new JoatseTunnel(owner, request, webListenerConfiguration.getPublicHostname());
 		for (TunnelRequestTcpItem r: tcpPortMap.keySet()) {
 			int port = tcpPortMap.get(r);
-			JoatseTunnel.TcpItem item = tunnel.addTcpItem(port, r);
-			tcpTunnelsByPortMap.computeIfAbsent(port, x->new ArrayList<>()).add(item);
+			tunnel.addTcpItem(port, r);
 		}
-		tunnelMap.put(request.uuid, tunnel);
+		List<TunnelRequestHttpItem> httpItems = request.getItems().stream()
+				.filter(i -> (i instanceof TunnelRequestHttpItem)).map(i->(TunnelRequestHttpItem)i).collect(Collectors.toList());
+
+		Map<String, Set<Integer>> httpPortsNotAvailable = new HashMap<>(); // TODO init with already busy ports
+		Collection<InetAddress> allowedAddress = tunnel.getAllowedAddress();
+		for (TunnelRequestHttpItem r : httpItems) {
+			InetSocketAddress httpHostPort = tunnelRegistry.findAvailableHttpPort(allowedAddress,
+					httpPortsNotAvailable);
+			if (httpHostPort != null) {
+				HttpProxy.HttpTunnel item = httpProxy.newHttpTunnel(tunnel, r, httpHostPort.getHostString(),
+						httpHostPort.getPort());
+				tunnel.addHttpItem(item);
+				httpPortsNotAvailable.computeIfAbsent(httpHostPort.getHostString(), k -> new HashSet<>())
+						.add(httpHostPort.getPort());
+			} else {
+				throw new RuntimeException("There is not an available port for http(s) tunnel");
+			}
+		}
+		log.info(
+				"Selected http endpoints {} for session {}", tunnel.getHttpItems().stream()
+						.map(h -> h.getCloudHostname() + ":" + h.getListenPort()).collect(Collectors.toList()),
+				request.getUuid());
+		tunnelRegistry.registerTunnel(tunnel);
 		return tunnel;
 	}
 
@@ -492,163 +542,89 @@ public class CloudTunnelService implements InitializingBean, DisposableBean {
 		}
 	}
 
-	public JoatseTunnel getTunnel(UUID uuid) {
-		lock.readLock().lock();
-		try {
-			JoatseTunnel tunnelDefinition = this.tunnelMap.get(uuid);
-			return tunnelDefinition;
-		} finally {
-			lock.readLock().unlock();
-		}
-	}
-
 	@Override
 	public void afterPropertiesSet() throws Exception {
 		lock.writeLock().lock();
 		try {
-			setupPortRange();
 			setupPortListen();
 		} finally {
 			lock.writeLock().unlock();
 		}
 	}
 
-	private void setupPortListen() {
-		for (int p = openPortMin; p <= openPortMax; p++) {
+	private void setupPortListen() throws UnknownHostException {
+		for (int p = openPortRange.min(); p <= openPortRange.max(); p++) {
 			setupPortListen(p);
 		}
 	}
 
-	private void setupPortListen(int p) {
-		lock.writeLock().lock();
-		try {
-			AsynchronousServerSocketChannel ass;
-			try {
-				ass = AsynchronousServerSocketChannel.open();
-			} catch (IOException e) {
-				throw new RuntimeException(e); // Unexpected
-			}
-			try {
-				ass.bind(new InetSocketAddress(listenHostname, p));
-			} catch (IOException e) {
-				log.error("Could not listen on port {}: {}", p, e.toString());
-				return; // Expected
-			}
-			lock.writeLock().unlock(); // Temporary unlock
-			try {
-				registerAcceptCycle(p, ass);
-			} finally {
-				lock.writeLock().lock();
-			}
-			openPortMap.put(p, ass);
-		} finally {
-			lock.writeLock().unlock();
-		}
-	}
-
-	private void registerAcceptCycle(int port, AsynchronousServerSocketChannel ass) {
-		lock.writeLock().lock();
-		try {
-			CompletionHandler<AsynchronousSocketChannel, Void> handler = new CompletionHandler<AsynchronousSocketChannel, Void>() {
-				@Override
-				public void failed(Throwable e, Void attachment) {
-					if (!shuttingDown.get()) {
-						log.error("Could not accept connections on port {}: {}", port, e.toString(), e);
-						lock.writeLock().lock();
-						try {
+	private void setupPortListen(int port) throws UnknownHostException {
+		
+		AsyncTcpPortListener<Void> asyncTcpPortListener = new AsyncTcpPortListener<Void>(
+				InetAddress.getByName(listenHostname), port, null,
+				(Consumer<Event<Void>>) new Consumer<AsyncTcpPortListener.Event<Void>>() {
+					@Override
+					public void accept(Event<Void> t) {
+						if (t.error != null) {
+							log.error(String.format("Could not accept connections on tcp port %s: %s", port, t.error.toString()), t.error);
+							lock.writeLock().lock();
 							try {
-								ass.close();
-							} catch (IOException e1) {
+								openPortMap.remove(port);
+								/*
+								 * TODO Tell someone.
+								 * 
+								 * We have to detect who's this connection for. Remember there can be several
+								 * connections from different users on the same port.
+								 */
+							} finally {
+								lock.writeLock().unlock();
 							}
-							openPortMap.remove(port);
-							/*
-							 * TODO Tell someone.
-							 * 
-							 * We have to detect who's this connection for. Remember there can be several
-							 * connections from different users on the same port.
-							 */
-						} finally {
-							lock.writeLock().unlock();
-						}
-					}
-				}
-
-				@Override
-				public void completed(AsynchronousSocketChannel channel, Void attachment) {
-					try {
-						registerAcceptCycle(port, ass); // Accept next. This must be the first line.
-						InetSocketAddress remoteAddress = (InetSocketAddress) IOTools
-								.runUnchecked(() -> channel.getRemoteAddress());
-						lock.readLock().lock();
-						try {
-							/*
-							 * We have to detect who's this connection for. Remember there can be several
-							 * connections from different users on the same port.
-							 */
-							List<JoatseTunnel.TcpItem> portTunnels = tcpTunnelsByPortMap.getOrDefault(port,
-									Collections.emptyList());
-							for (JoatseTunnel.TcpItem i : portTunnels) {
-								JoatseTunnel tunnel = i.getTunnel();
-								BiConsumer<Long, AsynchronousSocketChannel> listener = tunnel.tcpConnectionListener;
-								if (tunnel.allowedAddress.contains(remoteAddress.getAddress())) {
-									log.info("Accepted connection from {}.{} on port {}", remoteAddress, i.targetId, port);
-									lock.readLock().unlock(); // Temporary unlock to call callback
-									try {
-										listener.accept(i.targetId, channel);
-									} finally {
-										lock.readLock().lock();
+						} else if (t.channel != null) {
+							try {
+								InetSocketAddress remoteAddress = (InetSocketAddress) IOTools
+										.runUnchecked(() -> t.channel.getRemoteAddress());
+								lock.readLock().lock();
+								try {
+									/*
+									 * We have to detect who's this connection for. Remember there can be several
+									 * connections from different users on the same port.
+									 */
+									List<JoatseTunnel.TcpTunnel> matching = tunnelRegistry
+											.findMatchingTcpTunnel(remoteAddress.getAddress(), port);
+									if (matching.size() == 1) {
+										TcpTunnel tcpTunnel = matching.get(0);
+										JoatseTunnel tunnel = tcpTunnel.getTunnel();
+										log.info("Accepted connection from {}.{} on port {}", remoteAddress,
+												tcpTunnel.targetId, port);
+										tunnel.tunnelTcpConnection(tcpTunnel.targetId, t.channel);
+									} else {
+										// Not accepted then rejected
+										log.warn("Rejected connection from {} at port {}", remoteAddress, port);
+										IOTools.closeChannel(t.channel);
 									}
-									return;
+								} finally {
+									lock.readLock().unlock();
 								}
+							} catch (Exception e) {
+								log.warn("Error handling incomming socket: {}", e, e);
+								IOTools.closeChannel(t.channel);
 							}
-							// Not accepted then rejected
-							log.warn("Rejected connection from {} at port {}", remoteAddress, port);
-							IOTools.closeChannel(channel);
-						} finally {
-							lock.readLock().unlock();
+						} else {
+							log.info("Closed tcp port {}", port);
+							lock.writeLock().lock();
+							try {
+								openPortMap.remove(port);
+							} finally {
+								lock.writeLock().unlock();
+							}
 						}
-					} catch (Exception e) {
-						log.warn("Error handling incomming socket: {}", e, e);
-						IOTools.closeChannel(channel);
 					}
-				}
-			};
-			ass.accept(null, handler);
+				});
+		lock.writeLock().lock();
+		try {
+			openPortMap.put(port, asyncTcpPortListener);
 		} finally {
 			lock.writeLock().unlock();
-		}
-	}
-
-	private void setupPortRange() throws Exception {
-		if (openPortRangeString == null || openPortRangeString.isBlank()) {
-			throw new Exception("You must configure 'cloud.port.open.range' property.");
-		} else {
-			Matcher m = Pattern.compile("^([1-9][0-9]*)-([1-9][0-9]*)$").matcher(openPortRangeString);
-			if (!m.matches()) {
-				throw new Exception(
-						"You must configure 'cloud.port.open.range' as a port range 'min-max'. For example: '10000-10500'.");
-			}
-			openPortMin = Integer.parseInt(m.group(1));
-			openPortMax = Integer.parseInt(m.group(2));
-			if (openPortMax > 65535) {
-				openPortMax = 65535;
-			}
-			if (openPortMin > openPortMax) {
-				throw new Exception(
-						"You must configure 'cloud.port.open.range' as a port range 'min-max'. Min must be less or equal than max and both must be at most 65535.");
-			}
-			if (openPortMin < 1024) {
-				log.warn(
-						"Your 'cloud.port.open.range' enters the privileged port zone. Maybe you should use ports over 1023.");
-			}
-			if (webListenerConfiguration.getServerPort() >= openPortMin
-					&& webListenerConfiguration.getServerPort() <= openPortMax) {
-				throw new Exception(
-						"You must configure 'server.port' port outside the 'cloud.port.open.range' port range ("
-								+ openPortRangeString + ").");
-			}
-			openPortRangeString = openPortMin + "-" + openPortMax;
-			log.info("cloud.port.open.range = {}", openPortRangeString);
 		}
 	}
 
@@ -657,12 +633,16 @@ public class CloudTunnelService implements InitializingBean, DisposableBean {
 		lock.writeLock().lock();
 		try {
 			shuttingDown.set(true);
-			for (AsynchronousServerSocketChannel ass : this.openPortMap.values()) {
-				ass.close();
+			for (AsyncTcpPortListener<Void> port : this.openPortMap.values()) {
+				ForkJoinPool.commonPool().execute(()->port.close()); // Without lock
 			}
 			this.openPortMap.clear();
 		} finally {
 			lock.writeLock().unlock();
 		}
+	}
+
+	public void removeTunnel(UUID uuid) {
+		tunnelRegistry.removeTunnel(uuid);
 	}
 }

@@ -9,8 +9,8 @@ import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
 @Component
-public class WebListenerConfigurationDetector implements InitializingBean {
-	private Logger log = LoggerFactory.getLogger(WebListenerConfigurationDetector.class);
+public class ListenerConfigurationDetector implements InitializingBean {
+	private Logger log = LoggerFactory.getLogger(ListenerConfigurationDetector.class);
 
 	@Value("${security.require-ssl:}")
 	private Boolean sslRequired;

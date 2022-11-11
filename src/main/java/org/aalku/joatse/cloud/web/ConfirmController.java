@@ -11,10 +11,8 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.Stream;
 
-import org.aalku.joatse.cloud.config.WebListenerConfigurationDetector;
 import org.aalku.joatse.cloud.config.WebSecurityConfiguration;
 import org.aalku.joatse.cloud.service.CloudTunnelService;
-import org.aalku.joatse.cloud.service.CloudTunnelService.JoatseTunnel;
 import org.aalku.joatse.cloud.service.CloudTunnelService.TunnelRequest;
 import org.aalku.joatse.cloud.service.user.JoatseUser;
 import org.slf4j.Logger;
@@ -39,9 +37,6 @@ public class ConfirmController {
 	public final static String CONFIRM_SESSION_KEY_HASH = "CONFIRM_SESSION_KEY_HASH";
 	
 	private Logger log = LoggerFactory.getLogger(ConfirmController.class);
-	
-	@Autowired
-	private WebListenerConfigurationDetector webListenerConfiguration;
 	
 	@Autowired
 	private CloudTunnelService cloudTunnelService;
@@ -121,7 +116,12 @@ public class ConfirmController {
 				.getTunnelRequest(UUID.fromString(hashContainer.hash.replaceFirst("^#+", "")));
 		if (tunnelRequest != null) {
 			String allowedAddress = request.getRemoteAddr();
-			List<InetAddress> addresses = Arrays.asList(InetAddress.getAllByName(allowedAddress));
+			List<InetAddress> addresses;
+			if (InetAddress.getByName(allowedAddress).isLoopbackAddress()) {
+				addresses = Arrays.asList(InetAddress.getAllByName("localhost"));
+			} else {
+				addresses = Arrays.asList(InetAddress.getAllByName(allowedAddress));
+			}
 			tunnelRequest.setAllowedAddress(addresses);
 			model.addAttribute("hash", hashContainer.hash);
 			model.addAttribute("tunnelRequest", tunnelRequest);

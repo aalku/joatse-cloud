@@ -24,40 +24,56 @@
     <div class="row"><div class="col"></div><div class="col-4 text-right">{{user.nameToAddress}} (<a href="/logout">Log out</a>)</div></div>
 	<h1 class="text-center">Welcome to Joatse Cloud</h1>
 	<br/>
-	<h2>Your current sessions</h2>
-	<div class="accordion" id="accordionSessions">
-		<div class="card" v-for="(s, iS) in sessions.sessions">
-			<div class="card-header" :id="'sessionHead'+iS">
-		        <button class="btn btn-link btn-block text-left collapsed" type="button" data-toggle="collapse" :data-target="'#session'+iS" aria-expanded="false" :aria-controls="'session'+iS">
-					<h3>Session from {{s.requesterAddress}}</h3>
-		        </button>
-			</div>
-			<div :id="'session'+iS" :class="'collapse' + ((iS+1)==sessions.sessions.length ? ' last' : '')" :aria-labelledby="'sessionHead'+iS" data-parent="#accordionSessions">
-				<div class="card-body">
-					<form>
-						<div class="form-group">
-							<label for="creationTime">Request creation time</label>
-							<input class="form-control" type="text" id="creationTime" v-model="s.creationTime"
-								disabled="disabled" />
-						</div>
-						<div class="form-group">
-							<label for="allowedAddress">Allowed IP address</label>
-							<input class="form-control" type="text" id="allowedAddress" v-model="s.allowedAddress"
-								disabled="disabled" />
-						</div>
-						<div v-for="(tcp, iTcp) in s.tcpItems">
+	<div v-if="sessions.sessions.length">
+		<h2>Your current sessions</h2>
+		<div class="accordion" id="accordionSessions">
+			<div class="card" v-for="(s, iS) in sessions.sessions">
+				<div class="card-header" :id="'sessionHead'+iS">
+			        <button class="btn btn-link btn-block text-left collapsed" type="button" data-toggle="collapse" :data-target="'#session'+iS" aria-expanded="false" :aria-controls="'session'+iS">
+						<h3>Session from {{s.requesterAddress}}</h3>
+			        </button>
+				</div>
+				<div :id="'session'+iS" :class="'collapse' + ((iS+1)==sessions.sessions.length ? ' last' : '')" :aria-labelledby="'sessionHead'+iS" data-parent="#accordionSessions">
+					<div class="card-body">
+						<form>
 							<div class="form-group">
-								<label for="target">TCP Socket listening<span v-if="tcp.targetDescription"> -
-										{{tcp.targetDescription}}</span></label>
-								<input class="form-control" type="text" id="target" v-model="tcp.description"
+								<label for="creationTime">Request creation time</label>
+								<input class="form-control" type="text" id="creationTime" v-model="s.creationTime"
 									disabled="disabled" />
 							</div>
-						</div>
-					</form>
+							<div class="form-group">
+								<label for="allowedAddress">Allowed IP address</label>
+								<input class="form-control" type="text" id="allowedAddress" v-model="s.allowedAddress"
+									disabled="disabled" />
+							</div>
+							<div v-for="(tcp, iTcp) in s.tcpItems">
+								<div class="form-group">
+									<label for="target">TCP Socket listening<span v-if="tcp.targetDescription"> -
+											{{tcp.targetDescription}}</span></label>
+									<input class="form-control" type="text" id="target" v-model="tcp.description"
+										disabled="disabled" />
+								</div>
+							</div>
+						</form>
+					</div>
 				</div>
 			</div>
 		</div>
 	</div>
+	<div v-else>
+		<p>You don't have open sessions</p>
+		<p>In order to open a session you have to:
+		<ol>
+			<li>Run the joatse-target jar file with some arguments to share a port or resource.</li>
+			<li>Open the confirmation URL you will receive. Open it in the same device that needs to open the connection as the IP
+				address will be registered and it will be the only IP address admited later. If it's other person who need to
+				connect then you can share the URL with them as long as you don't confirm it first.</li>
+			<li>Following the URL log in to the cloud if you are asked to.</li>
+			<li>Review the connection details and accept it.</li>
+		</ol>
+		</p>
+	</div>
+
 </div>
 <script>
 new Vue({
@@ -79,6 +95,10 @@ new Vue({
 								s.requesterHostname = s.requesterAddress.split(':')[0];
 								s.creationTime = new Date(Date.parse(s.creationTime)).toUTCString();
 								s.tcpItems = s.tcpItems.map(tcp=>{
+									tcp.description = tcp.listenHostname + ':' + tcp.listenPort + ' --> [' + s.requesterHostname + '] --> ' + tcp.targetHostname + ':' + tcp.targetPort;
+									return tcp;
+								});
+								s.httpItems = s.httpItems.map(tcp=>{
 									tcp.description = tcp.listenHostname + ':' + tcp.listenPort + ' --> [' + s.requesterHostname + '] --> ' + tcp.targetHostname + ':' + tcp.targetPort;
 									return tcp;
 								});

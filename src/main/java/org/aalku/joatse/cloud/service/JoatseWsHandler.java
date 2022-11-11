@@ -1,6 +1,7 @@
 package org.aalku.joatse.cloud.service;
 
 import java.io.IOException;
+import java.net.URL;
 import java.nio.channels.AsynchronousSocketChannel;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -12,11 +13,13 @@ import java.util.function.BiConsumer;
 import java.util.stream.Collectors;
 
 import org.aalku.joatse.cloud.service.CloudTunnelService.JoatseTunnel;
-import org.aalku.joatse.cloud.service.CloudTunnelService.JoatseTunnel.TcpItem;
+import org.aalku.joatse.cloud.service.CloudTunnelService.JoatseTunnel.TcpTunnel;
 import org.aalku.joatse.cloud.service.CloudTunnelService.TunnelCreationResponse;
 import org.aalku.joatse.cloud.service.CloudTunnelService.TunnelCreationResult;
 import org.aalku.joatse.cloud.service.CloudTunnelService.TunnelCreationResult.Accepted;
+import org.aalku.joatse.cloud.service.CloudTunnelService.TunnelRequestHttpItem;
 import org.aalku.joatse.cloud.service.CloudTunnelService.TunnelRequestTcpItem;
+import org.aalku.joatse.cloud.service.HttpProxy.HttpTunnel;
 import org.aalku.joatse.cloud.service.user.JoatseUser;
 import org.aalku.joatse.cloud.tools.io.IOTools;
 import org.json.JSONArray;
@@ -111,7 +114,19 @@ public class JoatseWsHandler extends AbstractWebSocketHandler implements WebSock
 					int targetPort = jo.getInt("targetPort");
 					tcpTunnelReqs.add(new TunnelRequestTcpItem(targetId, targetDescription, targetHostname, targetPort));
 				}
-				TunnelCreationResponse requestedTunnel = cloudTunnelService.requestTunnel(wsSession.getPrincipal(), wsSession.getRemoteAddress(), tcpTunnelReqs);
+				
+				Collection<TunnelRequestHttpItem> httpTunnelReqs = new ArrayList<CloudTunnelService.TunnelRequestHttpItem>();
+				for (Object o: Optional.ofNullable(js.optJSONArray("httpTunnels")).orElseGet(()->new JSONArray())) {
+					JSONObject jo = (JSONObject) o;
+					long targetId = jo.getLong("targetId");
+					String targetDescription = jo.optString("targetDescription");
+					URL targetUrl = new URL(jo.optString("targetUrl"));
+					httpTunnelReqs.add(new TunnelRequestHttpItem(targetId, targetDescription, targetUrl));
+				}
+
+				
+				TunnelCreationResponse requestedTunnel = cloudTunnelService.requestTunnel(wsSession.getPrincipal(),
+						wsSession.getRemoteAddress(), tcpTunnelReqs, httpTunnelReqs);
 				if (!requestedTunnel.result.isDone()) {
 					// Not done (not rejected nor error) so we ask the user to use the url to confirm the connection
 					wsSessionMap.get(wsSession.getId()).sendMessage((WebSocketMessage<?>) new TextMessage(showUserAcceptanceUriMessage(requestedTunnel)));
@@ -120,15 +135,16 @@ public class JoatseWsHandler extends AbstractWebSocketHandler implements WebSock
 					if (e == null && r != null && r.isAccepted()) {
 						Accepted acceptedTunnel = (TunnelCreationResult.Accepted)r;
 						wsSession.getAttributes().put("uuid", acceptedTunnel.getUuid());
-						createTunnel(wsSession, acceptedTunnel.getTunnel());
+						associateTunnel(wsSession, acceptedTunnel.getTunnel());
 					} else {
 						String rejectionCause;
 						if (e != null) {
 							rejectionCause = e.getMessage();
+							log.error("Rejected connection. Cause: " + e, e);
 						} else {
 							rejectionCause = ((TunnelCreationResult.Rejected) r).getRejectionCause();
+							log.error("Rejected connection. Cause: {}", rejectionCause);
 						}
-						log.error("Rejected connection. Cause: {}", rejectionCause);
 						try {
 							wsSessionMap.get(wsSession.getId()).sendMessage((WebSocketMessage<?>) new TextMessage(rejectionJsonMessage(rejectionCause))).get();
 						} catch (Exception e1) {
@@ -165,16 +181,26 @@ public class JoatseWsHandler extends AbstractWebSocketHandler implements WebSock
 		}
 	}
 
-	private boolean createTunnel(WebSocketSession wsSession, JoatseTunnel tunnel) {
+	private boolean associateTunnel(WebSocketSession wsSession, JoatseTunnel tunnel) {
 		JWSSession jWSSession = wsSessionMap.get(wsSession.getId());
 		jWSSession.setTunnel(tunnel);
 		try {
+			/*
+			 * This is for http(S) too, for the final link between proxied connection and
+			 * websocket to target (and from target to http(s) server)
+			 */
 			tunnel.setTcpConnectionConsumer(new BiConsumer<Long, AsynchronousSocketChannel>() {
 				@Override
 				public void accept(Long targetId, AsynchronousSocketChannel t) {
 					log.info("Connection arrived from {} for tunnel {}.{} !!", IOTools.runUnchecked(()->t.getRemoteAddress()), tunnel.getUuid(), targetId);
-					TcpItem tcpItem = tunnel.getTcpItem(targetId);
-					TunnelTcpConnection c = new TunnelTcpConnection(jWSSession, t, tcpItem.targetId);
+					TcpTunnel tcpItem = tunnel.getTcpItem(targetId);
+					HttpTunnel httpTunnel = tunnel.getHttpItem(targetId);
+					if (tcpItem == null && httpTunnel == null) {
+						log.error("Unknown targetId: " + targetId);
+						IOTools.runFailable(()->t.close());
+						return;
+					}
+					TunnelTcpConnection c = new TunnelTcpConnection(jWSSession, t, targetId);
 					c.getCloseStatus().thenAccept(remote->{
 						// Connection closed ok
 						if (remote == null) {
@@ -212,16 +238,25 @@ public class JoatseWsHandler extends AbstractWebSocketHandler implements WebSock
 		JSONObject res = new JSONObject();
 		res.put("request", "CONNECTION");
 		res.put("response", "RUNNING");
-		Collection<JSONObject> ports = new ArrayList<>();
-		for (TcpItem i: tunnel.getTcpItems()) {
+		Collection<JSONObject> tcpTunnels = new ArrayList<>();
+		for (TcpTunnel i: tunnel.getTcpItems()) {
 			JSONObject j = new JSONObject();
 			j.put("listenHost", cloudPublicHostname);
 			j.put("listenPort", i.listenPort);
 			j.put("targetHostname", i.targetHostname);
 			j.put("targetPort", i.targetPort);
-			ports.add(j);
+			tcpTunnels.add(j);
 		}
-		res.put("tcpListenPorts", ports);
+		res.put("tcpTunnels", tcpTunnels);
+		Collection<JSONObject> httpTunnels = new ArrayList<>();
+		for (HttpTunnel i: tunnel.getHttpItems()) {
+			JSONObject j = new JSONObject();
+			j.put("listenHost", i.getCloudHostname());
+			j.put("listenUrl", i.getListenUrl());
+			j.put("targetUrl", i.getTargetURL());
+			httpTunnels.add(j);
+		}
+		res.put("httpTunnels", httpTunnels);
 		return res.toString();
 	}
 
