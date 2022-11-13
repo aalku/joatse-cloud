@@ -1,19 +1,36 @@
 package org.aalku.joatse.cloud.service;
 
+import java.io.BufferedOutputStream;
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.io.OutputStreamWriter;
+import java.io.PrintWriter;
 import java.net.InetAddress;
 import java.net.MalformedURLException;
+import java.net.URI;
 import java.net.URL;
+import java.nio.CharBuffer;
+import java.nio.charset.Charset;
+import java.util.Arrays;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.Executor;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import java.util.zip.GZIPInputStream;
+import java.util.zip.GZIPOutputStream;
 
 import org.aalku.joatse.cloud.config.ListenerConfigurationDetector;
 import org.aalku.joatse.cloud.service.CloudTunnelService.JoatseTunnel;
 import org.aalku.joatse.cloud.service.CloudTunnelService.TunnelRequestHttpItem;
 import org.aalku.joatse.cloud.tools.io.AsyncTcpPortListener;
+import org.aalku.joatse.cloud.tools.io.IOTools;
 import org.aalku.joatse.cloud.tools.io.PortRange;
 import org.eclipse.jetty.client.HttpClient;
 import org.eclipse.jetty.client.HttpClientTransport;
@@ -24,13 +41,15 @@ import org.eclipse.jetty.client.Origin.Protocol;
 import org.eclipse.jetty.client.ProxyConfiguration.Proxy;
 import org.eclipse.jetty.client.SwitchboardConnection;
 import org.eclipse.jetty.client.api.Request;
+import org.eclipse.jetty.client.api.Response;
 import org.eclipse.jetty.http.HttpVersion;
 import org.eclipse.jetty.io.ClientConnectionFactory;
 import org.eclipse.jetty.io.ClientConnector;
 import org.eclipse.jetty.io.Connection;
 import org.eclipse.jetty.io.EndPoint;
-import org.eclipse.jetty.proxy.AsyncProxyServlet;
-import org.eclipse.jetty.proxy.ProxyServlet;
+import org.eclipse.jetty.proxy.AbstractProxyServlet;
+import org.eclipse.jetty.proxy.AfterContentTransformer;
+import org.eclipse.jetty.proxy.AsyncMiddleManServlet;
 import org.eclipse.jetty.server.HttpConfiguration;
 import org.eclipse.jetty.server.HttpConnectionFactory;
 import org.eclipse.jetty.server.SecureRequestCustomizer;
@@ -40,6 +59,7 @@ import org.eclipse.jetty.server.SslConnectionFactory;
 import org.eclipse.jetty.servlet.ServletContextHandler;
 import org.eclipse.jetty.servlet.ServletHolder;
 import org.eclipse.jetty.util.Promise;
+import org.eclipse.jetty.util.URIUtil;
 import org.eclipse.jetty.util.ssl.SslContextFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -60,38 +80,48 @@ import jakarta.servlet.http.HttpServletResponse;
 public class HttpProxy implements InitializingBean, DisposableBean {
 
 	private static final String REQUEST_KEY_HTTPTUNNEL = "httpTunnel";
-	
+	private static final String REQUEST_KEY_REWRITE_HEADERS = "rewriteHeaders";
+	private static final String REQUEST_KEY_HIDE_PROXY = "hideProxy";
+
+	protected static final Set<String> REVERSE_PROXY_HEADERS = new LinkedHashSet<>(
+			Arrays.asList("Location", "Content-Location", "URI"));
+
 	private static final class JoatseProxy extends Proxy {
-		
-		private JoatseProxy(Address address, boolean secure, SslContextFactory.Client sslContextFactory, Protocol protocol) {
+
+		private JoatseProxy(Address address, boolean secure, SslContextFactory.Client sslContextFactory,
+				Protocol protocol) {
 			super(address, secure, sslContextFactory, protocol);
 		}
+
 		@Override
 		public boolean matches(Origin origin) {
 			return true;
 		}
+
 		@Override
 		public ClientConnectionFactory newClientConnectionFactory(ClientConnectionFactory connectionFactory) {
 			return new ClientConnectionFactory() {
 				@Override
 				public Connection newConnection(EndPoint endPoint, Map<String, Object> context) throws IOException {
-					log.debug("newConnection. EndPoint={}; Context=\r\n{};",
-							endPoint,
-							mapToString(context));
+					log.debug("newConnection. EndPoint={}; Context=\r\n{};", endPoint, mapToString(context));
 					@SuppressWarnings("unchecked")
-					Promise<Connection> promise = (Promise<Connection>)context.get(HttpClientTransport.HTTP_CONNECTION_PROMISE_CONTEXT_KEY);
-					HttpDestination destination = (HttpDestination)context.get(HttpClientTransport.HTTP_DESTINATION_CONTEXT_KEY);
-		            Executor executor = destination.getHttpClient().getExecutor();
-		            SwitchboardConnection connection = new SwitchboardConnection(endPoint, executor, destination, promise, connectionFactory, context);
-		            return customize(connection, context);
+					Promise<Connection> promise = (Promise<Connection>) context
+							.get(HttpClientTransport.HTTP_CONNECTION_PROMISE_CONTEXT_KEY);
+					HttpDestination destination = (HttpDestination) context
+							.get(HttpClientTransport.HTTP_DESTINATION_CONTEXT_KEY);
+					Executor executor = destination.getHttpClient().getExecutor();
+					SwitchboardConnection connection = new SwitchboardConnection(endPoint, executor, destination,
+							promise, connectionFactory, context);
+					return customize(connection, context);
 				}
 			};
 		}
 	}
-	
+
 	public static class HttpTunnel {
+
 		public HttpTunnel(JoatseTunnel tunnel, long targetId, String targetDescription, URL targetURL,
-				String cloudHostname, int listenPort, String listenUrl) {
+				String cloudHostname, int listenPort, String listenUrl, String cloudProtocol) {
 			this.tunnel = tunnel;
 			this.targetId = targetId;
 			this.listenPort = listenPort;
@@ -99,53 +129,69 @@ public class HttpProxy implements InitializingBean, DisposableBean {
 			this.targetDescription = targetDescription;
 			this.targetURL = targetURL;
 			this.listenUrl = listenUrl;
+			this.cloudProtocol = cloudProtocol;
 		}
+
 		private final JoatseTunnel tunnel;
 
 		final long targetId;
 		private final int listenPort;
+		private final String cloudProtocol;
 		private final String cloudHostname;
-		
+
 		private final String targetDescription;
 		private final URL targetURL;
 
 		private String listenUrl;
-		
+
 		public String getTargetDomain() {
 			return targetURL.getHost();
 		}
+
 		public int getTargetPort() {
 			return Optional.of(targetURL.getPort()).map(p -> p <= 0 ? targetURL.getDefaultPort() : p).get();
 		}
+
 		public URL getTargetURL() {
 			return targetURL;
 		}
+
 		public String getTargetProtocol() {
 			return targetURL.getProtocol();
 		}
+
 		public String getTargetDescription() {
 			return targetDescription;
 		}
+
 		public long getTargetId() {
 			return targetId;
 		}
+
 		public String getCloudHostname() {
 			return cloudHostname;
 		}
+
 		public int getListenPort() {
 			return listenPort;
 		}
+
 		public JoatseTunnel getTunnel() {
 			return tunnel;
 		}
+
 		public String getListenUrl() {
 			return listenUrl;
 		}
+
+		public String getCloudProtocol() {
+			return cloudProtocol;
+		}
 	}
-	
-		
+
 	static Logger log = LoggerFactory.getLogger(HttpProxy.class);
-	
+	static Logger logJetty = LoggerFactory.getLogger(org.eclipse.jetty.proxy.AsyncProxyServlet.class);
+
 	@Autowired
 	@Qualifier("httpPortRange")
 	private PortRange httpPortRange;
@@ -158,17 +204,17 @@ public class HttpProxy implements InitializingBean, DisposableBean {
 
 	@Value("${server.ssl.key-store-password:}")
 	private String keyStorePassword;
-	
+
 	@Autowired
 	private ListenerConfigurationDetector webListenerConfigurationDetector;
-	
+
 	@Autowired
 	@Qualifier("switchboardPortListener")
 	private AsyncTcpPortListener<Void> switchboardPortListener;
-	
+
 	@Autowired
 	private TunnelRegistry tunnelRegistry;
-	
+
 	private Server proxyServer;
 
 	@Override
@@ -177,11 +223,11 @@ public class HttpProxy implements InitializingBean, DisposableBean {
 			proxyServer.stop();
 		}
 	}
-	
+
 	@Override
 	public void afterPropertiesSet() throws Exception {
 		Server proxy = new Server();
-		
+
 		if (httpPortRange.isActive()) {
 			boolean ssl = webListenerConfigurationDetector.isSslEnabled();
 			for (int port = httpPortRange.min(); port <= httpPortRange.max(); port++) {
@@ -199,14 +245,14 @@ public class HttpProxy implements InitializingBean, DisposableBean {
 			}
 		}
 
-		AsyncProxyServlet proxyServlet = new AsyncProxyServlet() {
+		AsyncMiddleManServlet proxyServlet = new AsyncMiddleManServlet() {
 			private static final long serialVersionUID = 1L;
 
 			@Override
 			protected Logger createLogger() {
-				return log;
+				return logJetty;
 			}
-			
+
 			@Override
 			protected HttpClient newHttpClient(ClientConnector clientConnector) {
 				HttpClient client = super.newHttpClient(clientConnector);
@@ -228,12 +274,16 @@ public class HttpProxy implements InitializingBean, DisposableBean {
 							serverName);
 					HttpTunnel httpTunnel = tunnelsMatching.size() == 1 ? tunnelsMatching.get(0) : null;
 					if (httpTunnel != null) {
-						log.info("Request {} {} for tunnel {}", httpServletRequest.getMethod(), httpServletRequest.getRequestURL(), httpTunnel.getTargetId());
+						log.info("Request {} {} for tunnel {}", httpServletRequest.getMethod(),
+								httpServletRequest.getRequestURL(), httpTunnel.getTargetId());
 						request.setAttribute(REQUEST_KEY_HTTPTUNNEL, httpTunnel);
+						request.setAttribute(REQUEST_KEY_REWRITE_HEADERS, true); // TODO
+						request.setAttribute(REQUEST_KEY_HIDE_PROXY, true); // TODO
 						super.service(request, response);
 					} else {
-						log.warn("Request {} {} rejected", httpServletRequest.getMethod(), httpServletRequest.getRequestURL());
-						((HttpServletResponse)response).sendError(404, "Unknown resource requested");
+						log.warn("Request {} {} rejected", httpServletRequest.getMethod(),
+								httpServletRequest.getRequestURL());
+						((HttpServletResponse) response).sendError(404, "Unknown resource requested");
 						if (tunnelsMatching.size() > 1) {
 							throw new RuntimeException("Found several tunnels matching: " + tunnelsMatching.size());
 						} else {
@@ -247,6 +297,14 @@ public class HttpProxy implements InitializingBean, DisposableBean {
 			}
 			
 			@Override
+			protected void addProxyHeaders(HttpServletRequest clientRequest, Request proxyRequest) {
+				boolean hideProxy = (boolean)clientRequest.getAttribute(REQUEST_KEY_HIDE_PROXY);
+				if (!hideProxy) {
+					super.addProxyHeaders(clientRequest, proxyRequest);
+				}
+			}
+
+			@Override
 			protected Request newProxyRequest(HttpServletRequest request, String rewrittenTarget) {
 				Request proxyRequest = super.newProxyRequest(request, rewrittenTarget);
 				proxyRequest.tag(request.getAttribute(REQUEST_KEY_HTTPTUNNEL));
@@ -259,17 +317,145 @@ public class HttpProxy implements InitializingBean, DisposableBean {
 					return null;
 				try {
 					URL clientURL = new URL(clientRequest.getRequestURL().toString());
-					
+
 					HttpTunnel tunnel = (HttpTunnel) clientRequest.getAttribute(REQUEST_KEY_HTTPTUNNEL);
-					String targetUrl = new URL(tunnel.getTargetProtocol(), tunnel.getTargetDomain(), tunnel.getTargetPort(),
-							clientURL.getFile())
-							.toExternalForm();
+					String targetUrl = rewriteUrl(clientURL, tunnel);
 					log.info("Proxying {} to {}", clientURL, targetUrl);
 					return targetUrl;
 				} catch (MalformedURLException e) {
 					throw new RuntimeException(e);
 				}
 			}
+
+			private String rewriteUrl(URL clientURL, HttpTunnel tunnel) throws MalformedURLException {
+				String targetUrl = new URL(tunnel.getTargetProtocol(), tunnel.getTargetDomain(),
+						tunnel.getTargetPort(), clientURL.getFile()).toExternalForm();
+				return targetUrl;
+			}
+
+			@Override
+			protected String filterServerResponseHeader(HttpServletRequest clientRequest, Response serverResponse,
+					String headerName, String headerValue) {
+				HttpTunnel tunnel = (HttpTunnel) clientRequest.getAttribute(REQUEST_KEY_HTTPTUNNEL);
+				boolean rewriteHeaders = Optional.ofNullable(clientRequest.getAttribute(REQUEST_KEY_REWRITE_HEADERS))
+						.map(x -> (boolean) x).orElse(false);
+				if (rewriteHeaders) {
+					if (REVERSE_PROXY_HEADERS.contains(headerName)) {
+						URI locationURI = URI.create(headerValue).normalize();
+						if (locationURI.isAbsolute() && isProxiedLocation(tunnel, locationURI)) {
+							StringBuilder newURI = URIUtil.newURIBuilder(clientRequest.getScheme(),
+									clientRequest.getServerName(), clientRequest.getServerPort());
+							String component = locationURI.getRawPath();
+							if (component != null)
+								newURI.append(component);
+							component = locationURI.getRawQuery();
+							if (component != null)
+								newURI.append('?').append(component);
+							component = locationURI.getRawFragment();
+							if (component != null)
+								newURI.append('#').append(component);
+							return URI.create(newURI.toString()).normalize().toString();
+						}
+					} else {
+						// TODO Maybe even dig deeper into header contents
+					}
+				}
+				return headerValue;
+			}
+
+			protected boolean isProxiedLocation(HttpTunnel tunnel, URI uri) {
+				try {
+					if (uri.getScheme().equals(tunnel.getTargetProtocol()) && uri.getHost().equals(tunnel.getTargetDomain()) && IOTools.getPort(uri.toURL()) == tunnel.getTargetPort()) {
+						log.info("URI is proxied: {}", uri);
+						return true;
+					} else {
+						log.info("URI not proxied: {}", uri);
+						return false;
+					}
+				} catch (MalformedURLException e) {
+					throw new RuntimeException(e);
+				}
+			}
+			
+			@Override
+			protected ContentTransformer newClientRequestContentTransformer(HttpServletRequest clientRequest,
+					Request proxyRequest) {
+				log.info("newClientRequestContentTransformer()");
+				return new AfterContentTransformer() {
+					@Override
+					public boolean transform(Source source, Sink sink) throws IOException {
+						log.info("transform.request {}", proxyRequest.getURI());
+						return false; // TODO
+					}
+				};
+			}
+
+			@Override
+			protected ContentTransformer newServerResponseContentTransformer(HttpServletRequest clientRequest,
+					HttpServletResponse proxyResponse, Response serverResponse) {
+				JoatseTunnel tunnel = ((HttpTunnel) clientRequest.getAttribute(REQUEST_KEY_HTTPTUNNEL)).getTunnel();
+				Pattern urlPreffixPattern = Pattern.compile("(?<!\\w)http(s?)://[-\\w_.]+(:[0-9]+)?(?![-\\w_.])");
+				Pattern contentTypeTextPattern = Pattern.compile("^(text/.*|application/manifest[+]json.*|application/json.*|application/javascript.*)$");
+				URL clientRequestUrl = IOTools.runUnchecked(()->new URL(serverResponse.getRequest().getURI().toString()));
+				URL proxyRequestUrl = IOTools.runUnchecked(()->new URL(clientRequest.getRequestURL().toString()));
+				return new AfterContentTransformer() {
+					@Override
+					public boolean transform(Source source, Sink sink) throws IOException {
+						String contentType = proxyResponse.getContentType();
+						String contentEncoding = Optional.ofNullable(proxyResponse.getHeader("Content-Encoding")).orElse("identity");
+						if (Arrays.asList("identity", "gzip").contains(contentEncoding)
+								&& contentTypeTextPattern.matcher(contentType).matches()) {
+							log.info("transform.response {}: {}-->{} {} {}", 
+									tunnel.getUuid(),
+									proxyRequestUrl,
+									clientRequestUrl,
+									contentType,
+									contentEncoding);
+							Charset charset = Charset.forName(proxyResponse.getCharacterEncoding());
+
+							InputStream ins = wrap(contentEncoding, source.getInputStream());
+							OutputStream outs = wrap(contentEncoding, sink.getOutputStream());
+							BufferedReader in = new BufferedReader(new InputStreamReader(ins, charset));
+							PrintWriter out = new PrintWriter(new OutputStreamWriter(new BufferedOutputStream(outs), charset));
+							CharBuffer buffer = CharBuffer.allocate(1024 * 100);
+							while (true) {
+								int r = in.read(buffer);
+								if (r < 0) {
+									IOTools.rewriteStringContent(buffer, out, true, urlPreffixPattern, tunnel.getUrlRewriteFunction());
+									in.close();
+									out.close();
+									return true;
+								} else {
+									if (r > 0 && buffer.hasRemaining()) {
+										continue; // Buffer must be full if not last
+									}
+									IOTools.rewriteStringContent(buffer, out, false, urlPreffixPattern, tunnel.getUrlRewriteFunction());
+								}
+							}
+						} else {
+							log.info("transform.response can't rewrite {}-->{} {} {}", 
+									proxyRequestUrl,
+									clientRequestUrl,
+									contentType,
+									contentEncoding);
+							return false;
+						}
+					}
+					private OutputStream wrap(String contentEncoding, OutputStream out) throws IOException {
+						if (contentEncoding.equals("gzip")) {
+							return new GZIPOutputStream(out);
+						}
+						return out;
+					}
+					private InputStream wrap(String contentEncoding, InputStream in) throws IOException {
+						if (contentEncoding.equals("gzip")) {
+							return new GZIPInputStream(in);
+						}
+						return in;
+					}
+				};
+			}
+			
 		};
 		ServletContextHandler servletContextHandler = servletContextHandler(proxyServlet);
 		proxy.setHandler(servletContextHandler);
@@ -298,13 +484,13 @@ public class HttpProxy implements InitializingBean, DisposableBean {
 		return sslConnector;
 	}
 
-	private static ServletHolder proxyHolder(ProxyServlet proxyServlet) {
+	private static ServletHolder proxyHolder(AbstractProxyServlet proxyServlet) {
 		final ServletHolder proxyHolder = new ServletHolder(proxyServlet);
 		proxyHolder.setInitOrder(1);
 		return proxyHolder;
 	}
 
-	private static ServletContextHandler servletContextHandler(ProxyServlet servlet) {
+	private static ServletContextHandler servletContextHandler(AbstractProxyServlet servlet) {
 		final ServletContextHandler servletContextHandler = new ServletContextHandler();
 		servletContextHandler.setContextPath("/");
 		servletContextHandler.addServlet(proxyHolder(servlet), "/*");
@@ -321,14 +507,14 @@ public class HttpProxy implements InitializingBean, DisposableBean {
 			throw new RuntimeException(e.toString(), e);
 		}
 		HttpTunnel res = new HttpTunnel(tunnel, r.targetId, r.targetDescription, r.targetUrl, cloudHostname, listenPort,
-				listenUrl);
+				listenUrl, protocol);
 		return res;
 	}
-	
+
 	private static String mapToString(Map<String, Object> context) {
-		return context.entrySet().stream()
-				.map(e -> String.format("  %s:\t%s", e.getKey(), e.getValue()))
+		return context.entrySet().stream().map(e -> String.format("  %s:\t%s", e.getKey(), e.getValue()))
 				.collect(Collectors.joining(",\r\n"));
 	}
+
 
 }

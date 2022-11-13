@@ -18,7 +18,7 @@ You need to install and run a server that is accessible from all the involved co
 
 Once you got a server running you just have to run the client software telling what cloud it should use and what do you want to share. It will give you a http(s) link and you have to open it from the computer that needs to have access to the shared resource. You need to use the same computer so your public IP address is registered in the server and it can give access only to you (and anyone sharing your IP address like coworkers or roommates).
 
-You don't need to use passwords with the client software so anyone else sharing the same computer.
+You don't need to use passwords with the client software so anyone else sharing the same computer can't get your password from the running process list or any file on disk, etc. The client sofware will tell you to open something like https://cloud/#bunchofnumbers and there you have to authenticate, not in the console. You get a QR (yes, in a text console) that you can scan to use your phone too.
 
 ## Architecture
 
@@ -36,9 +36,7 @@ It just started working so it isn't beautiful, it might crash and the functional
 
 You can find the client software [here](https://github.com/aalku/joatse-target).
 
-Http(s) is shared with a reverse proxy that doesn't rewrite any content so you probably can't share many web apps as many of them have absolute URLs, several subdomains and cors. It can share many simple pages, web apps designed to work behind a proxy and any APIs but maybe not with absolute URLs that you must follow, like pagination links.
-
-I might add some rewrite rules and the possibility to use your own.
+Http(s) is shared with a reverse proxy that might not work for modern web apps but it can share many simple pages, web apps designed to work behind a proxy and any APIs. This needs some work to be compatible with more places and tools. I might add a javascript library to be added to web pages from the proxy so the page itself captures AJAX requests and makes them run through the proxy.
 
 There's a lot of work ahead. We need to create use guides a better web interface and a lot of improvements.
 

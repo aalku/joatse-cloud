@@ -1,12 +1,19 @@
 package org.aalku.joatse.cloud.tools.io;
 
 import java.io.IOException;
+import java.io.PrintWriter;
+import java.net.URL;
 import java.nio.ByteBuffer;
+import java.nio.CharBuffer;
 import java.nio.channels.AsynchronousSocketChannel;
 import java.nio.channels.CompletionHandler;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ForkJoinPool;
+import java.util.function.Function;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public interface IOTools {
 	public interface IOTask<E> {
@@ -217,5 +224,63 @@ public interface IOTools {
 		readFrom.read(buffer, true, ch); // Launch
 	}
 
+	/**
+	 * Rewrite some content as replace(transformFrom, transformTo) but taking into
+	 * account that if last==false then there is more content after this so part of
+	 * the pattern might get matched at the end so this method might advance little
+	 * if last==false or even nothing if the buffer is not full too.
+	 */
+	public static void rewriteStringContent(CharBuffer input, PrintWriter out, boolean last, Pattern transformFrom,
+			Function<String, String> replaceFunction) {
+		// System.err.println(String.format("Iteration for input: %s", input.duplicate().flip().toString()));
+		if (input.hasRemaining() && ! last) {
+			throw new IllegalArgumentException("Buffer must be full if it's not the last");
+		}
+		/*
+		 * Do not touch the second half unless it's the last part. Buffer must be full
+		 * or last
+		 */
+		int splitPoint = last ? input.remaining() : (input.capacity() / 2);
+		String string = new String(input.array(), 0, input.position()); // From 0 to position
+		StringBuilder sb = new StringBuilder(string.length() * 2);
+		Matcher m = transformFrom.matcher(string);
+		int processed = 0;
+		while (m.find()) {
+			int start = m.start();
+			int end = m.end();
+			if (end > splitPoint) {
+				// System.err.println(String.format("Found at %d ending after splitPoint %d!!! ", start, splitPoint));
+				// Append prefix
+				int pp = processed;
+				processed = Math.min(start, splitPoint);
+				sb.append(string.substring(pp, processed));
+				// System.err.println("processed = " + sb.toString());
+				splitPoint = processed; // Don't copy more than this
+				break; // We can't touch that part yet
+			}
+			// System.err.println("Match at " + m.start() + "!!!");
+			m.appendReplacement(sb, replaceFunction.apply(m.group()));
+			splitPoint = Math.max(sb.length(), splitPoint); // We can't split before
+			processed = m.end();
+		}
+		// Remaining
+		int end;
+		if (last) {
+			end = string.length();
+		} else {
+			end = splitPoint;
+		}
+		sb.append(string.substring(processed, end));
+		// Write
+		out.write(sb.toString());
+		out.flush();
+		// Roll input
+		input.position(end);
+		input.compact();
+	}
+
+	public static int getPort(URL url) {
+		return Optional.of(url.getPort()).filter(p -> p > 0).orElseGet(() -> url.getDefaultPort());
+	}
 
 }

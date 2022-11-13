@@ -25,6 +25,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import org.aalku.joatse.cloud.config.ListenerConfigurationDetector;
@@ -172,6 +173,7 @@ public class CloudTunnelService implements InitializingBean, DisposableBean {
 		private BiConsumer<Long, AsynchronousSocketChannel> tcpConnectionListener;
 		private Collection<TcpTunnel> tcpItems = new ArrayList<>(1);
 		private Collection<HttpTunnel> httpItems = new ArrayList<>(1);
+		private Map<String, String> urlRewriteMap = new LinkedHashMap<>();
 
 		public JoatseTunnel(JoatseUser owner, TunnelRequest request, String cloudPublicHostname) {
 			this.owner = owner;
@@ -210,8 +212,21 @@ public class CloudTunnelService implements InitializingBean, DisposableBean {
 			TcpTunnel i = new TcpTunnel(port, r);
 			tcpItems.add(i);
 		}
-
+		
 		public void addHttpItem(HttpTunnel item) {
+			URL tau = item.getTargetURL();
+			int port = IOTools.getPort(tau);
+			String protocol = tau.getProtocol();
+			String host = tau.getHost();
+			boolean portOptional = (port == 80 && protocol.equals("http")) || port == 443 && protocol.equals("https");
+			
+			String taus1 = protocol + "://" + host + ":" + port;
+			Optional<String> taus2 = portOptional ? Optional.of(protocol + "://" + host) : Optional.empty();
+			
+			String tuu = item.getCloudProtocol() + "://" + item.getCloudHostname() + ":" + item.getListenPort();
+			
+			urlRewriteMap.put(taus1, tuu);
+			taus2.ifPresent(x->urlRewriteMap.put(x, tuu));
 			httpItems.add(item);
 		}
 
@@ -246,6 +261,10 @@ public class CloudTunnelService implements InitializingBean, DisposableBean {
 		 */
 		public void tunnelTcpConnection(long targetId, AsynchronousSocketChannel channel) {
 			tcpConnectionListener.accept(targetId, channel);
+		}
+
+		public Function<String, String> getUrlRewriteFunction() {
+			return u->urlRewriteMap.getOrDefault(u, u);
 		}
 	}
 
