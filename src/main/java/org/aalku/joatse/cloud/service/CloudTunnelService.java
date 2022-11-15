@@ -174,6 +174,7 @@ public class CloudTunnelService implements InitializingBean, DisposableBean {
 		private Collection<TcpTunnel> tcpItems = new ArrayList<>(1);
 		private Collection<HttpTunnel> httpItems = new ArrayList<>(1);
 		private Map<String, String> urlRewriteMap = new LinkedHashMap<>();
+		private Map<String, String> urlReverseRewriteMap = new LinkedHashMap<>();
 
 		public JoatseTunnel(JoatseUser owner, TunnelRequest request, String cloudPublicHostname) {
 			this.owner = owner;
@@ -225,8 +226,15 @@ public class CloudTunnelService implements InitializingBean, DisposableBean {
 			
 			String tuu = item.getCloudProtocol() + "://" + item.getCloudHostname() + ":" + item.getListenPort();
 			
+			// FIXME tuu might have an optional port too
+			
 			urlRewriteMap.put(taus1, tuu);
-			taus2.ifPresent(x->urlRewriteMap.put(x, tuu));
+			if (taus2.isPresent()) {
+				urlRewriteMap.put(taus2.get(), tuu);
+				urlReverseRewriteMap.put(tuu, taus2.get());
+			} else {
+				urlReverseRewriteMap.put(tuu, taus1);
+			}
 			httpItems.add(item);
 		}
 
@@ -265,6 +273,10 @@ public class CloudTunnelService implements InitializingBean, DisposableBean {
 
 		public Function<String, String> getUrlRewriteFunction() {
 			return u->urlRewriteMap.getOrDefault(u, u);
+		}
+
+		public Function<String, String> getUrlReverseRewriteFunction() {
+			return u->urlReverseRewriteMap.getOrDefault(u, u);
 		}
 	}
 

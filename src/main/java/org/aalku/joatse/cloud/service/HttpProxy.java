@@ -8,12 +8,14 @@ import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.io.OutputStreamWriter;
 import java.io.PrintWriter;
+import java.io.StringWriter;
 import java.net.InetAddress;
 import java.net.MalformedURLException;
 import java.net.URI;
 import java.net.URL;
 import java.nio.CharBuffer;
 import java.nio.charset.Charset;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -42,6 +44,8 @@ import org.eclipse.jetty.client.ProxyConfiguration.Proxy;
 import org.eclipse.jetty.client.SwitchboardConnection;
 import org.eclipse.jetty.client.api.Request;
 import org.eclipse.jetty.client.api.Response;
+import org.eclipse.jetty.http.HttpField;
+import org.eclipse.jetty.http.HttpFields;
 import org.eclipse.jetty.http.HttpVersion;
 import org.eclipse.jetty.io.ClientConnectionFactory;
 import org.eclipse.jetty.io.ClientConnector;
@@ -85,6 +89,9 @@ public class HttpProxy implements InitializingBean, DisposableBean {
 
 	protected static final Set<String> REVERSE_PROXY_HEADERS = new LinkedHashSet<>(
 			Arrays.asList("Location", "Content-Location", "URI"));
+
+	private static final Pattern PATTERN_URL_PREFFIX = Pattern.compile("(?<!\\w)http(s?)://[-\\w_.]+(:[0-9]+)?(?![-\\w_.])");
+	private static final Pattern PATTERN_CONTENT_TYPE_TEXT = Pattern.compile("^(text/.*|application/manifest[+]json.*|application/json.*|application/javascript.*)$");
 
 	private static final class JoatseProxy extends Proxy {
 
@@ -307,8 +314,41 @@ public class HttpProxy implements InitializingBean, DisposableBean {
 			@Override
 			protected Request newProxyRequest(HttpServletRequest request, String rewrittenTarget) {
 				Request proxyRequest = super.newProxyRequest(request, rewrittenTarget);
-				proxyRequest.tag(request.getAttribute(REQUEST_KEY_HTTPTUNNEL));
+				HttpTunnel hTunnel = (HttpTunnel) request.getAttribute(REQUEST_KEY_HTTPTUNNEL);
+				if (hTunnel != null) {
+					proxyRequest.tag(hTunnel);
+				}
 				return proxyRequest;
+			}
+			
+			@Override
+			protected void copyRequestHeaders(HttpServletRequest clientRequest, Request proxyRequest) {
+				HttpTunnel hTunnel = (HttpTunnel) clientRequest.getAttribute(REQUEST_KEY_HTTPTUNNEL);
+				super.copyRequestHeaders(clientRequest, proxyRequest);
+				if ((boolean)clientRequest.getAttribute(REQUEST_KEY_REWRITE_HEADERS)) { // TODO Move from here
+					JoatseTunnel jTunnel = hTunnel.getTunnel();
+					// rewrite urls in headers
+					proxyRequest.headers((HttpFields.Mutable m)->{
+						Set<String> fieldNames = m.getFieldNamesCollection();
+						for (String fieldName: fieldNames) {
+							boolean change = false;
+							List<HttpField> oldList = m.getFields(fieldName);
+							List<String> newList = new ArrayList<>(oldList.size());
+							for (HttpField field: oldList) {
+								StringWriter out = new StringWriter();
+								CharBuffer buffer = CharBuffer.allocate(field.getValue().length());
+								buffer.put(field.getValue());
+								boolean match = IOTools.rewriteStringContent(buffer, new PrintWriter(out), true, PATTERN_URL_PREFFIX, jTunnel.getUrlReverseRewriteFunction());
+								change = change || match;
+								newList.add(out.toString());
+							}
+							if (change) { // replace all headers with that name if any change
+								m.remove(fieldName);
+								m.put(fieldName, newList);
+							}
+						}
+					});
+				}
 			}
 
 			@Override
@@ -332,7 +372,7 @@ public class HttpProxy implements InitializingBean, DisposableBean {
 						tunnel.getTargetPort(), clientURL.getFile()).toExternalForm();
 				return targetUrl;
 			}
-
+			
 			@Override
 			protected String filterServerResponseHeader(HttpServletRequest clientRequest, Response serverResponse,
 					String headerName, String headerValue) {
@@ -394,8 +434,6 @@ public class HttpProxy implements InitializingBean, DisposableBean {
 			protected ContentTransformer newServerResponseContentTransformer(HttpServletRequest clientRequest,
 					HttpServletResponse proxyResponse, Response serverResponse) {
 				JoatseTunnel tunnel = ((HttpTunnel) clientRequest.getAttribute(REQUEST_KEY_HTTPTUNNEL)).getTunnel();
-				Pattern urlPreffixPattern = Pattern.compile("(?<!\\w)http(s?)://[-\\w_.]+(:[0-9]+)?(?![-\\w_.])");
-				Pattern contentTypeTextPattern = Pattern.compile("^(text/.*|application/manifest[+]json.*|application/json.*|application/javascript.*)$");
 				URL clientRequestUrl = IOTools.runUnchecked(()->new URL(serverResponse.getRequest().getURI().toString()));
 				URL proxyRequestUrl = IOTools.runUnchecked(()->new URL(clientRequest.getRequestURL().toString()));
 				return new AfterContentTransformer() {
@@ -404,7 +442,7 @@ public class HttpProxy implements InitializingBean, DisposableBean {
 						String contentType = proxyResponse.getContentType();
 						String contentEncoding = Optional.ofNullable(proxyResponse.getHeader("Content-Encoding")).orElse("identity");
 						if (Arrays.asList("identity", "gzip").contains(contentEncoding)
-								&& contentTypeTextPattern.matcher(contentType).matches()) {
+								&& PATTERN_CONTENT_TYPE_TEXT.matcher(contentType).matches()) {
 							log.info("transform.response {}: {}-->{} {} {}", 
 									tunnel.getUuid(),
 									proxyRequestUrl,
@@ -421,7 +459,7 @@ public class HttpProxy implements InitializingBean, DisposableBean {
 							while (true) {
 								int r = in.read(buffer);
 								if (r < 0) {
-									IOTools.rewriteStringContent(buffer, out, true, urlPreffixPattern, tunnel.getUrlRewriteFunction());
+									IOTools.rewriteStringContent(buffer, out, true, PATTERN_URL_PREFFIX, tunnel.getUrlRewriteFunction());
 									in.close();
 									out.close();
 									return true;
@@ -429,7 +467,7 @@ public class HttpProxy implements InitializingBean, DisposableBean {
 									if (r > 0 && buffer.hasRemaining()) {
 										continue; // Buffer must be full if not last
 									}
-									IOTools.rewriteStringContent(buffer, out, false, urlPreffixPattern, tunnel.getUrlRewriteFunction());
+									IOTools.rewriteStringContent(buffer, out, false, PATTERN_URL_PREFFIX, tunnel.getUrlRewriteFunction());
 								}
 							}
 						} else {

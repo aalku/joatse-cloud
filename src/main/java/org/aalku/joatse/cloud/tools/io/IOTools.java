@@ -230,7 +230,7 @@ public interface IOTools {
 	 * the pattern might get matched at the end so this method might advance little
 	 * if last==false or even nothing if the buffer is not full too.
 	 */
-	public static void rewriteStringContent(CharBuffer input, PrintWriter out, boolean last, Pattern transformFrom,
+	public static boolean rewriteStringContent(CharBuffer input, PrintWriter out, boolean last, Pattern transformFrom,
 			Function<String, String> replaceFunction) {
 		// System.err.println(String.format("Iteration for input: %s", input.duplicate().flip().toString()));
 		if (input.hasRemaining() && ! last) {
@@ -240,7 +240,8 @@ public interface IOTools {
 		 * Do not touch the second half unless it's the last part. Buffer must be full
 		 * or last
 		 */
-		int splitPoint = last ? input.remaining() : (input.capacity() / 2);
+		boolean match = false;
+		int splitPoint = last ? input.position() : (input.capacity() / 2);
 		String string = new String(input.array(), 0, input.position()); // From 0 to position
 		StringBuilder sb = new StringBuilder(string.length() * 2);
 		Matcher m = transformFrom.matcher(string);
@@ -260,6 +261,7 @@ public interface IOTools {
 			}
 			// System.err.println("Match at " + m.start() + "!!!");
 			m.appendReplacement(sb, replaceFunction.apply(m.group()));
+			match = true;
 			splitPoint = Math.max(sb.length(), splitPoint); // We can't split before
 			processed = m.end();
 		}
@@ -277,6 +279,7 @@ public interface IOTools {
 		// Roll input
 		input.position(end);
 		input.compact();
+		return match;
 	}
 
 	public static int getPort(URL url) {
