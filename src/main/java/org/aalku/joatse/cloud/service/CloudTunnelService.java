@@ -32,7 +32,8 @@ import org.aalku.joatse.cloud.config.ListenerConfigurationDetector;
 import org.aalku.joatse.cloud.config.WebSocketConfig;
 import org.aalku.joatse.cloud.service.CloudTunnelService.JoatseTunnel.TcpTunnel;
 import org.aalku.joatse.cloud.service.HttpProxy.HttpTunnel;
-import org.aalku.joatse.cloud.service.user.JoatseUser;
+import org.aalku.joatse.cloud.service.user.repository.UserRepository;
+import org.aalku.joatse.cloud.service.user.vo.JoatseUser;
 import org.aalku.joatse.cloud.tools.io.AsyncTcpPortListener;
 import org.aalku.joatse.cloud.tools.io.AsyncTcpPortListener.Event;
 import org.aalku.joatse.cloud.tools.io.IOTools;
@@ -394,8 +395,10 @@ public class CloudTunnelService implements InitializingBean, DisposableBean {
 	/**
 	 * For easier testing of target only. FIXME remove this.
 	 */
-	private String[] automaticTunnelAcceptance = Optional
-			.ofNullable(System.getProperty("automaticTunnelAcceptance", null)).map(s -> s.split("-", 2)).orElse(null);
+	private String automaticTunnelAcceptance = System.getProperty("automaticTunnelAcceptance");
+
+	@Autowired
+	private UserRepository userRepository;
 
 	/**
 	 * Requests a connection need. The client user must then confirm it from the ip
@@ -427,7 +430,7 @@ public class CloudTunnelService implements InitializingBean, DisposableBean {
 					try {
 						Thread.sleep(500);
 						request.setAllowedAddress(Arrays.asList(InetAddress.getAllByName("localhost"))); // TODO
-						acceptTunnelRequest(request.uuid, new JoatseUser(automaticTunnelAcceptance[0], automaticTunnelAcceptance[1]));
+						acceptTunnelRequest(request.uuid, userRepository.findByLogin(automaticTunnelAcceptance));
 					} catch (InterruptedException e) {
 					} catch (UnknownHostException e) {
 					}

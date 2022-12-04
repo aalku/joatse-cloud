@@ -3,26 +3,29 @@ package org.aalku.joatse.cloud.web;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-import org.aalku.joatse.cloud.service.user.JoatseUser;
+import org.aalku.joatse.cloud.service.user.UserManager;
+import org.aalku.joatse.cloud.service.user.vo.JoatseUser;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.oauth2.client.registration.ClientRegistration;
 import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
 import org.springframework.security.oauth2.client.web.OAuth2AuthorizationRequestRedirectFilter;
 import org.springframework.stereotype.Controller;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.ResponseBody;
+import org.springframework.web.servlet.View;
+import org.springframework.web.servlet.view.RedirectView;
 
 @Controller
 public class JoatseLoginController implements InitializingBean {
 	
 	
-	/* TODO Model: org.springframework.security.web.authentication.ui.DefaultLoginPageGeneratingFilter */
-	
 	@Autowired(required = false)
 	private ClientRegistrationRepository clientRegistrationRepository;
+	
+	@Autowired
+	private UserManager userManager;
 	
 	@Value("${loginPasswordEnabled:true}")
 	private String loginPasswordEnabled; // TODO call a service
@@ -30,6 +33,19 @@ public class JoatseLoginController implements InitializingBean {
 	private String oauthLoginBaseUrl = OAuth2AuthorizationRequestRedirectFilter.DEFAULT_AUTHORIZATION_REQUEST_BASE_URI;
 	
 	private Map<String, String> oauth2Registrations = null;
+	
+	/**
+	 * Entry point after login to redirect depending on session attributes 
+	 */
+	@GetMapping("/postLogin")
+	public View postLogin(jakarta.servlet.http.HttpSession session) {
+		if (session.getAttribute(ConfirmController.CONFIRM_SESSION_KEY_HASH) != null) {
+			/* We are confirming a request */
+			return new RedirectView(ConfirmController.POST_LOGIN_CONFIRM_HASH);
+		} else {
+			return new RedirectView("/");
+		}
+	}
 	
 	@GetMapping(path = "/loginForm/options", produces = "application/json")
 	@ResponseBody
@@ -63,10 +79,11 @@ public class JoatseLoginController implements InitializingBean {
 	@GetMapping("/user")
 	@ResponseBody
 	public Map<String, Object> getUser() {
-		JoatseUser user = (JoatseUser) SecurityContextHolder.getContext().getAuthentication().getPrincipal();
+		JoatseUser user = userManager.getAuthenticatedUser().orElseThrow();
 		return Map.of(
-				"nameToAddress", user.getNameToAddress()
-				);
+				"nameToAddress", user.getUsername(),
+				"isAdmin", user.getAuthorities().stream().anyMatch(a->a.getAuthority().equals("ROLE_JOATSE_ADMIN"))
+			);
 	}
 
 }

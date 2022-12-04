@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+	<meta charset="utf-8">
+	<title>Joatse - User administration</title>
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+    <script src="https://polyfill.io/v3/polyfill.min.js?features=es2015"></script>
+    <!-- development version, includes helpful console warnings -->
+    <script src="https://cdn.jsdelivr.net/npm/vue@2/dist/vue.js"></script>
+	<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@4.6.2/dist/css/bootstrap.min.css"
+		integrity="sha384-xOolHFLEh07PJGoPkLv1IbcEPTNtaed2xpHsD9ESMhqIYd0nLMwNLD69Npy4HI+N" crossorigin="anonymous">
+	<!-- BootstapVue -->
+	<link type="text/css" rel="stylesheet" href="https://unpkg.com/bootstrap-vue@latest/dist/bootstrap-vue.min.css" />
+	<script src="https://unpkg.com/bootstrap-vue@latest/dist/bootstrap-vue.min.js"></script>
+	<!-- Load the following for BootstrapVueIcons support -->
+	<script src="https://unpkg.com/bootstrap-vue@latest/dist/bootstrap-vue-icons.min.js"></script>
+</head>
+
+<body>
+<div class="container" id="app">
+	<div><!-- Nav bar -->
+		<b-navbar toggleable="lg" type="dark" variant="dark">
+			<b-navbar-brand href="/">Joatse Cloud</b-navbar-brand>
+			<b-navbar-toggle target="nav-collapse"></b-navbar-toggle>
+			<b-collapse id="nav-collapse" is-nav>
+				<b-navbar-nav class="ml-auto">
+					<b-nav-item href="/admin/users" right v-if="pathname != '/admin/users'">Admin users</b-nav-item>
+					<b-nav-item-dropdown right>
+						<template #button-content><em>{{user.nameToAddress}}</em></template>
+						<b-dropdown-item href="/logout">Sign Out</b-dropdown-item>
+					</b-nav-item-dropdown>
+				</b-navbar-nav>
+			</b-collapse>
+		</b-navbar>
+	</div><!-- Nav bar -->
+	<br/>
+	<h2>User administration</h2>
+	<b-table
+		:fields="fields"
+		:items="userProvider"
+		primary-key="UUID"
+		head-variant="light"
+		ref="users"
+		foot-clone
+    >
+		<template #cell(UUID)="data">
+			<small :title="data.item.UUID">{{data.item.UUID.split('-')[0]+"..."}}<small>
+		</template>
+		<template #cell(actions)="data">
+			<a href="#" v-if="data.item.canDelete" @click="editUser(data.item)"><b-icon-pencil-square></b-icon-pencil-square></a>
+			<a href="#" v-if="data.item.canDelete" @click="deleteUser(data.item)"><b-icon-trash></b-icon-trash></a>
+		</template>
+		<template #foot()="data">
+			&nbsp;
+		</template>
+		<template #foot(actions)="data">
+			<a href="#" @click="addUser()"><b-icon-plus-square></b-icon-plus-square></a>
+		</template>
+	</b-table>
+	<b-modal ref="editUserModal" :title="this.editUserTitle" @ok="editUserModalOk" @hidden="editUserModalReset" :ok-disabled="!formValid">
+  		<b-form @submit.stop.prevent v-if="editingUser">
+			<div>
+		        <label for="login">Login</label>
+				<b-form-input
+		          id="login"
+		          v-model="editingUser.login"
+		          type="text"
+		          required
+		          :state="loginState"
+		        ></b-form-input>
+				<label for="role">Role</label>
+				<b-form-select id="role" v-model="editingUser.role" :options="roles"></b-form-select>
+			</div>
+			<div>
+			    <label for="password">Password</label>
+			    <b-form-input type="password" id="password" v-model="editingUser.password" aria-describedby="password-help-block" :state="passwordState"></b-form-input>
+	    		<label v-if="editingUser.password?.length" for="password2">Confirm password</label>
+			    <b-form-input v-if="editingUser.password?.length" type="password" id="password2" v-model="editingUser.password2" aria-describedby="password-help-block" :state="passwordConfirmState"></b-form-input>
+			    <b-form-text id="password-help-block">
+			      Your password must be 8-20 characters long, contain letters and numbers, and must not
+			      contain spaces, special characters, or emoji.
+			    </b-form-text>
+			</div>
+		</b-form>
+	</b-modal>
+
+</div>
+<script>
+new Vue({
+        el: "#app",
+        data: {
+			user: {},
+	        fields: [{key: 'UUID', label: 'UUID'}, 'login',  'role', { key: 'actions', label: 'Actions' }],
+	        editingUser: null,
+	        editUserTitle: null,
+	        passwordMandatory: null,
+	        validated: false,
+	        roles: {"USER":"User","ADMIN":"Admin"}
+        },
+        computed: {
+			loginState() {
+				return !!this.editingUser?.login?.match(/^(?:[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*|"(?:[\x01-\x08\x0b\x0c\x0e-\x1f\x21\x23-\x5b\x5d-\x7f]|\\[\x01-\x09\x0b\x0c\x0e-\x7f])*")@(?:(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]*[a-z0-9])?|\[(?:(?:(2(5[0-5]|[0-4][0-9])|1[0-9][0-9]|[1-9]?[0-9]))\.){3}(?:(2(5[0-5]|[0-4][0-9])|1[0-9][0-9]|[1-9]?[0-9])|[a-z0-9-]*[a-z0-9]:(?:[\x01-\x08\x0b\x0c\x0e-\x1f\x21-\x5a\x53-\x7f]|\\[\x01-\x09\x0b\x0c\x0e-\x7f])+)\])$/);
+			},
+			passwordState() {
+				if (!this.passwordMandatory && !this.editingUser.password) {
+					return true;
+				}
+				return !!this.editingUser?.password?.match(/^\S.{6,}\S$/);
+			},
+			passwordConfirmState() {
+				return this.editingUser?.password == this.editingUser?.password2;
+			},
+			formValid() {
+				return this.loginState && this.passwordState && this.passwordConfirmState;
+			},
+			pathname() {
+				return new URL(window.location.href).pathname;
+			}
+		},
+        methods: {
+			async userProvider(ctx) {
+				try {
+				    return await fetch('/admin/users/list').then(response => response.json())
+	        			.then((data) => data.users);
+				} catch (error) {
+					console.error("Error getting users", error);
+				    return [];
+				}
+			},
+			async editUser(user) {
+				this.editingUser = {...user};
+				this.validated = false;
+				this.editUserTitle=`Edit user '${this.editingUser?.login}'`;
+				this.passwordMandatory = false;
+				this.$refs.editUserModal.show();
+			},
+			async addUser() {
+				this.editingUser = {role:"USER"};
+				this.validated = false;
+				this.editUserTitle='Create user';
+				this.passwordMandatory = true;
+				this.$refs.editUserModal.show();
+			},
+			editUserModalOk(bvModalEvent) {
+				// Prevent modal from closing
+				bvModalEvent.preventDefault();
+				// Trigger submit handler
+				this.handleSubmit();
+			},
+			editUserModalReset() {
+				this.editingUser = null;
+				this.editUserTitle = null;
+				this.validation = null;
+			},
+			async handleSubmit() {
+				await this.saveUser(this.editingUser);
+				this.$nextTick(() => {
+					this.$refs.editUserModal.hide();
+					this.editUserModalReset();
+				})
+			},
+			async saveUser(user) {
+				console.log("Saving data...", user);
+				let u = {login: user.login, role: user.role};
+				if (user.password) {
+					u.password = user.password;
+				}
+				let res = null;
+				let body = null;
+				let error = null;
+				try {
+					if (user.UUID) {
+						u.UUID = user.UUID;
+						res = await fetch('/admin/users', {
+							method: 'PUT', 
+							headers: {
+								'Content-type': 'application/json; charset=UTF-8',
+							},
+							body: JSON.stringify(u)
+						});
+					} else {
+						res = await fetch('/admin/users', {
+							method: 'POST',
+							headers: {
+								'Content-type': 'application/json; charset=UTF-8',
+							},
+							body: JSON.stringify(u)
+						});
+					}
+					body = await res.json();
+				} catch (e) {
+					error = e;
+				}
+				console.log("Result", res, body, error);
+				if (res.ok) {
+					this.$refs.users.refresh();
+				} else {
+					if (error) {
+						console.error(error);
+					}
+					console.error(body);
+					// TODO
+				}
+			},
+			async deleteUser(user) {
+		        this.$bvModal.msgBoxConfirm('Please confirm that you want to delete the user: ' + user.login, {
+		          title: 'Please Confirm',
+		          size: 'sm',
+		          buttonSize: 'sm',
+		          okVariant: 'danger',
+		          okTitle: 'Delete',
+		          cancelTitle: 'Cancel',
+		          footerClass: 'p-2',
+		          hideHeaderClose: false,
+		          centered: true
+				})
+					.then(async value => {
+						console.info("delete?", value)
+						if (value) {
+							await fetch('/admin/users/' + user.UUID, { method: 'DELETE' });
+							this.$refs.users.refresh();
+						}
+					})
+					.catch(err => {
+						console.error("delete?", err);
+						this.$refs.users.refresh();
+					})
+	      },
+        },
+        async created() {
+			let loadData = async ()=> {
+		        await fetch('/user').then(response => response.json())
+	        			.then((data) => this.user = data);
+        	}
+        	await loadData();
+			setInterval(()=>loadData(), 5000);
+		}
+    });
+</script>
+</body>
+
+</html>

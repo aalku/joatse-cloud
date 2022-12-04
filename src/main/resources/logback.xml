@@ -15,7 +15,9 @@
 	<logger name="org.aalku.joatse.cloud.proxy.jetty" level="DEBUG" />
 	
 	<logger name="org.eclipse.jetty.io" level="INFO" />
-
+	
+	<logger name="org.eclipse.jetty.proxy.AsyncProxyServlet" level="INFO" />
+	
 	<root level="INFO">
 		<appender-ref ref="STDOUT" />
 	</root>

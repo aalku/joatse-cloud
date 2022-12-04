@@ -1,6 +1,9 @@
 package org.aalku.joatse.cloud.web;
 
+import java.net.InetAddress;
+import java.net.UnknownHostException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -13,11 +16,12 @@ import org.aalku.joatse.cloud.service.CloudTunnelService.JoatseTunnel.TcpTunnel;
 import org.aalku.joatse.cloud.service.HttpProxy.HttpTunnel;
 import org.aalku.joatse.cloud.service.JWSSession;
 import org.aalku.joatse.cloud.service.JoatseWsHandler;
-import org.aalku.joatse.cloud.service.user.JoatseUser;
+import org.aalku.joatse.cloud.service.user.UserManager;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
+
+import jakarta.servlet.http.HttpServletRequest;
 
 @RestController
 public class SessionController {
@@ -27,11 +31,28 @@ public class SessionController {
 	
 	@Autowired
 	private ListenerConfigurationDetector webListenerConfiguration;
+	
+	@Autowired
+	private UserManager userManager;
+	
+	private List<InetAddress> getRemoteAddressess(HttpServletRequest request) {
+		String allowedAddress = request.getRemoteAddr();
+		List<InetAddress> addresses;
+		try {
+			if (InetAddress.getByName(allowedAddress).isLoopbackAddress()) {
+				addresses = Arrays.asList(InetAddress.getAllByName("localhost"));
+			} else {
+				addresses = Arrays.asList(InetAddress.getAllByName(allowedAddress));
+			}
+		} catch (UnknownHostException e) {
+			throw new RuntimeException("Internal error", e);
+		}
+		return addresses;
+	}
 
 	@GetMapping("/sessions")
-	public Map<String, Object> getSessions() {
-		JoatseUser user = (JoatseUser) SecurityContextHolder.getContext().getAuthentication().getPrincipal();
-		Collection<JWSSession> sessions = wsHandler.getSessions(user);
+	public Map<String, Object> getSessions(HttpServletRequest request) {
+		Collection<JWSSession> sessions = wsHandler.getSessions(userManager.getAuthenticatedUser().orElseThrow());
 		Map<String, Object> res = new LinkedHashMap<>();
 		res.put("sessions", sessions.stream().map(s->{
 			Map<String, Object> m = new LinkedHashMap<>();
@@ -39,7 +60,9 @@ public class SessionController {
 			JoatseTunnel t = s.getTunnel();
 			m.put("requesterAddress", t.getRequesterAddress());
 			m.put("allowedAddress", t.getAllowedAddress());
-			m.put("creationTime", t.getCreationTime());
+			m.put("creationTime", t.getCreationTime());			
+			boolean allowed = getRemoteAddressess(request).stream().anyMatch(a->t.getAllowedAddress().contains(a));
+			m.put("addressIsAllowed", allowed);
 			
 			Collection<TcpTunnel> tcpItems = t.getTcpItems();
 			List<Map<String, Object>> atcp = new ArrayList<>(tcpItems.size());

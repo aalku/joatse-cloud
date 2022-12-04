@@ -20,7 +20,7 @@ import org.aalku.joatse.cloud.service.CloudTunnelService.TunnelCreationResult.Ac
 import org.aalku.joatse.cloud.service.CloudTunnelService.TunnelRequestHttpItem;
 import org.aalku.joatse.cloud.service.CloudTunnelService.TunnelRequestTcpItem;
 import org.aalku.joatse.cloud.service.HttpProxy.HttpTunnel;
-import org.aalku.joatse.cloud.service.user.JoatseUser;
+import org.aalku.joatse.cloud.service.user.vo.JoatseUser;
 import org.aalku.joatse.cloud.tools.io.IOTools;
 import org.json.JSONArray;
 import org.json.JSONObject;

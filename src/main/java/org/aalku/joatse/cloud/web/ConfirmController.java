@@ -14,12 +14,10 @@ import java.util.stream.Stream;
 import org.aalku.joatse.cloud.config.WebSecurityConfiguration;
 import org.aalku.joatse.cloud.service.CloudTunnelService;
 import org.aalku.joatse.cloud.service.CloudTunnelService.TunnelRequest;
-import org.aalku.joatse.cloud.service.user.JoatseUser;
+import org.aalku.joatse.cloud.service.user.UserManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.security.core.Authentication;
-import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -34,6 +32,8 @@ import jakarta.servlet.http.HttpServletRequest;
 @Controller
 public class ConfirmController {
 	
+	public static final String POST_LOGIN_CONFIRM_HASH = "/postLogin/confirmHash";
+
 	public final static String CONFIRM_SESSION_KEY_HASH = "CONFIRM_SESSION_KEY_HASH";
 	
 	private Logger log = LoggerFactory.getLogger(ConfirmController.class);
@@ -41,6 +41,9 @@ public class ConfirmController {
 	@Autowired
 	private CloudTunnelService cloudTunnelService;
 	
+	@Autowired
+	private UserManager userManager;
+
 	public static class HashContainer implements Serializable {
 		private static final long serialVersionUID = 1L;
 		private String hash;
@@ -55,13 +58,10 @@ public class ConfirmController {
 	 * You just logged in
 	 * @return
 	 */
-	@GetMapping("/postLogin") // FIXME // TODO  
+	@GetMapping(POST_LOGIN_CONFIRM_HASH)
 	public View postLogin(
-			@SessionAttribute(name = ConfirmController.CONFIRM_SESSION_KEY_HASH, required = false) HashContainer hash) {
-		if (!SecurityContextHolder.getContext().getAuthentication().isAuthenticated()) {
-			throw new AssertionError();
-		}
-		log.info("postLogin");
+			@SessionAttribute(name = ConfirmController.CONFIRM_SESSION_KEY_HASH, required = true) HashContainer hash) {
+		userManager.requireRole("JOATSE_USER");
 		if (null != hash) {
 			return new RedirectView("/CF/A"); // With hash
 		} else {
@@ -89,7 +89,7 @@ public class ConfirmController {
 		//log.info("confirm2");
 		request.getSession(true).setAttribute(CONFIRM_SESSION_KEY_HASH, new HashContainer(hash));
 		
-		if (SecurityContextHolder.getContext().getAuthentication().isAuthenticated()) {
+		if (userManager.hasRole("JOATSE_USER")) {
 			return new RedirectView("/CF/A");
 		} else {
 			return new RedirectView(WebSecurityConfiguration.PATH_LOGIN_FORM);
@@ -104,24 +104,16 @@ public class ConfirmController {
 	@GetMapping("/CF/A")  
 	public String confirm3(Model model, HttpServletRequest request,
 			@SessionAttribute(name = ConfirmController.CONFIRM_SESSION_KEY_HASH, required = true) HashContainer hashContainer) throws UnknownHostException {
+		userManager.requireRole("JOATSE_USER");
 		//log.info("confirm3");
 		request.getSession(false).removeAttribute(CONFIRM_SESSION_KEY_HASH);
-		if (!SecurityContextHolder.getContext().getAuthentication().isAuthenticated()) {
-			throw new AssertionError();
-		}
 		if (hashContainer.receivedInstant.plusSeconds(300).isBefore(Instant.now())) {
 			throw new RuntimeException("Expired hash"); // TODO show it nicely
 		}
 		TunnelRequest tunnelRequest = cloudTunnelService
 				.getTunnelRequest(UUID.fromString(hashContainer.hash.replaceFirst("^#+", "")));
 		if (tunnelRequest != null) {
-			String allowedAddress = request.getRemoteAddr();
-			List<InetAddress> addresses;
-			if (InetAddress.getByName(allowedAddress).isLoopbackAddress()) {
-				addresses = Arrays.asList(InetAddress.getAllByName("localhost"));
-			} else {
-				addresses = Arrays.asList(InetAddress.getAllByName(allowedAddress));
-			}
+			List<InetAddress> addresses = getRemoteAddressess(request);
 			tunnelRequest.setAllowedAddress(addresses);
 			model.addAttribute("hash", hashContainer.hash);
 			model.addAttribute("tunnelRequest", tunnelRequest);
@@ -131,15 +123,24 @@ public class ConfirmController {
 		return "cf3.html";
 	}
 
+
+	private List<InetAddress> getRemoteAddressess(HttpServletRequest request) throws UnknownHostException {
+		String allowedAddress = request.getRemoteAddr();
+		List<InetAddress> addresses;
+		if (InetAddress.getByName(allowedAddress).isLoopbackAddress()) {
+			addresses = Arrays.asList(InetAddress.getAllByName("localhost"));
+		} else {
+			addresses = Arrays.asList(InetAddress.getAllByName(allowedAddress));
+		}
+		return addresses;
+	}
+
 	@PostMapping("/CF/A")  
 	public String confirm4(Model model, @RequestParam(name = "uuid") String sUuid) {
+		userManager.requireRole("JOATSE_USER");
 		//log.info("confirm4");
-		Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-		if (!auth.isAuthenticated()) {
-			throw new AssertionError();
-		}
 		UUID uuid = UUID.fromString(sUuid);
-		cloudTunnelService.acceptTunnelRequest(uuid, (JoatseUser) auth.getPrincipal());
+		cloudTunnelService.acceptTunnelRequest(uuid, userManager.getAuthenticatedUser().orElseThrow());
 		return "redirect:/";
 	}
 	
