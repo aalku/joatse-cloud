@@ -1,0 +1,6 @@
+Security considerations on the cloud side:
+1. You should get a domain and enable SSL with a valid certificate to protect your user's traffic. If you can't get a wildcard certificate (more expensive) then get one for each subdomain you need.
+2. The web browser cookie storage is shared per domain so you should create enough subdomains and configure them in cloud.http.tunnel.hosts. The system will use each domain before repeating with different port.
+
+Security considerations on the client side:
+1. When using several http tunnels (no matter if you are using several targets or sessions) in the same web browser there is a risk of content leakage between them. If you don't own the target servers of the tunnels this can be very dangerous for the safety of your sessions, passwords, etc. or even one target could get to invoke actions in the other one. Please don't have several http tunnels at the same time in the same browser unless they are all yours. There is also a risk of unintended session sharing.

@@ -41,9 +41,9 @@ public class TunnelRegistry {
 
 	public synchronized InetSocketAddress findAvailableHttpPort(Collection<InetAddress> allowedAddress,
 			Map<String, Set<Integer>> forbiddenPortMap) {
-		for (String host : httpHosts) {
-			Set<Integer> forbiddenPorts = forbiddenPortMap.computeIfAbsent(host, x -> new HashSet<>());
-			for (int p = httpPortRange.min(); p < httpPortRange.max(); p++) {
+		for (int p = httpPortRange.min(); p < httpPortRange.max(); p++) {
+			for (String host : httpHosts) {
+				Set<Integer> forbiddenPorts = forbiddenPortMap.computeIfAbsent(host, x -> new HashSet<>());
 				if (forbiddenPorts.contains(p)) {
 					continue;
 				}

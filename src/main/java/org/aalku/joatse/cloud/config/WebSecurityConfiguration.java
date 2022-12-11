@@ -34,6 +34,7 @@ public class WebSecurityConfiguration {
 
 	public static final String PATH_LOGIN_FORM = "/loginForm";
 	public static final String PATH_LOGIN_POST = "/loginPost";
+	private static final String PATH_POST_LOGIN = "/postLogin";
 	
 	@SuppressWarnings("unused")
 	private Logger log = LoggerFactory.getLogger(WebSecurityConfiguration.class);
@@ -64,9 +65,11 @@ public class WebSecurityConfiguration {
 			.authorizeHttpRequests()
 				.requestMatchers(WebSocketConfig.CONNECTION_HTTP_PATH).anonymous()
 				.requestMatchers(PATH_LOGIN_FORM, PATH_LOGIN_FORM + "/**", PATH_LOGIN_POST).permitAll()
+				.requestMatchers(PATH_POST_LOGIN, PATH_POST_LOGIN + "/**").authenticated() // But not any specific auth
 				.requestMatchers("/css/*.css").permitAll()
 				.requestMatchers("/CF", "/CF/2").permitAll()
-				.anyRequest().hasRole("JOATSE_USER")
+				.requestMatchers("/").authenticated() // But not any specific auth
+				.anyRequest().hasRole("JOATSE_USER") // You must be an enabled user for anything else
         	.and()
         	.formLogin(c->{
         		c.loginPage(PATH_LOGIN_FORM).loginProcessingUrl(PATH_LOGIN_POST).successHandler(new AuthenticationSuccessHandler() {

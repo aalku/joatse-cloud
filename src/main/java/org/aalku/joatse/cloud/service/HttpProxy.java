@@ -17,6 +17,7 @@ import java.nio.CharBuffer;
 import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -37,6 +38,7 @@ import org.aalku.joatse.cloud.tools.io.PortRange;
 import org.eclipse.jetty.client.HttpClient;
 import org.eclipse.jetty.client.HttpClientTransport;
 import org.eclipse.jetty.client.HttpDestination;
+import org.eclipse.jetty.client.HttpRequest;
 import org.eclipse.jetty.client.Origin;
 import org.eclipse.jetty.client.Origin.Address;
 import org.eclipse.jetty.client.Origin.Protocol;
@@ -77,15 +79,19 @@ import org.springframework.stereotype.Component;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.ServletRequest;
 import jakarta.servlet.ServletResponse;
+import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
 @Component
 public class HttpProxy implements InitializingBean, DisposableBean {
 
+	private static final String COOKIE_JOATSE_HTTP_TUNNEL_TARGET_ID = "JoatseHttpTunnelTargetId";
+
 	private static final String REQUEST_KEY_HTTPTUNNEL = "httpTunnel";
 	private static final String REQUEST_KEY_REWRITE_HEADERS = "rewriteHeaders";
 	private static final String REQUEST_KEY_HIDE_PROXY = "hideProxy";
+	private static final String REQUEST_KEY_JOATSE_CLEAR_COOKIES = "JOATSE_CLEAR_COOKIES";
 
 	protected static final Set<String> REVERSE_PROXY_HEADERS = new LinkedHashSet<>(
 			Arrays.asList("Location", "Content-Location", "URI"));
@@ -312,8 +318,8 @@ public class HttpProxy implements InitializingBean, DisposableBean {
 			}
 
 			@Override
-			protected Request newProxyRequest(HttpServletRequest request, String rewrittenTarget) {
-				Request proxyRequest = super.newProxyRequest(request, rewrittenTarget);
+			protected HttpRequest newProxyRequest(HttpServletRequest request, String rewrittenTarget) {
+				HttpRequest proxyRequest = (HttpRequest) super.newProxyRequest(request, rewrittenTarget);
 				HttpTunnel hTunnel = (HttpTunnel) request.getAttribute(REQUEST_KEY_HTTPTUNNEL);
 				if (hTunnel != null) {
 					proxyRequest.tag(hTunnel);
@@ -325,7 +331,7 @@ public class HttpProxy implements InitializingBean, DisposableBean {
 			protected void copyRequestHeaders(HttpServletRequest clientRequest, Request proxyRequest) {
 				HttpTunnel hTunnel = (HttpTunnel) clientRequest.getAttribute(REQUEST_KEY_HTTPTUNNEL);
 				super.copyRequestHeaders(clientRequest, proxyRequest);
-				if ((boolean)clientRequest.getAttribute(REQUEST_KEY_REWRITE_HEADERS)) { // TODO Move from here
+				if ((boolean)clientRequest.getAttribute(REQUEST_KEY_REWRITE_HEADERS)) {
 					JoatseTunnel jTunnel = hTunnel.getTunnel();
 					// rewrite urls in headers
 					proxyRequest.headers((HttpFields.Mutable m)->{
@@ -349,6 +355,28 @@ public class HttpProxy implements InitializingBean, DisposableBean {
 						}
 					});
 				}
+				/* Handle outgoing cookies */
+				proxyRequest.headers((HttpFields.Mutable m)->{
+					List<String> cookies = m.getFields(org.eclipse.jetty.http.HttpHeader.COOKIE).stream()
+							.map(h -> h.getValue()).flatMap(v -> Arrays.asList(v.split("; ")).stream())
+							.collect(Collectors.toList());
+					String prefix = COOKIE_JOATSE_HTTP_TUNNEL_TARGET_ID + "=";
+					Optional<String> targetIdCookie = cookies.stream().filter(c->c.startsWith(prefix)).map(c->c.substring(prefix.length())).findFirst();
+					if (!targetIdCookie.isPresent() || !targetIdCookie.get().equals(hTunnel.getTargetId() + "")) {
+						// Domain change. Clear all cookies here and delete them in the response
+						List<String> cookieNames = cookies.stream().map(c->c.split("=",2)[0]).filter(c->!c.equals(COOKIE_JOATSE_HTTP_TUNNEL_TARGET_ID)).collect(Collectors.toList());
+						clientRequest.setAttribute(REQUEST_KEY_JOATSE_CLEAR_COOKIES, new ArrayList<>(cookieNames));
+						m.remove(org.eclipse.jetty.http.HttpHeader.COOKIE); // Don't pass any (and they will be deleted on response)
+					} else if (targetIdCookie.isPresent()) {
+						// Don't pass that cookie
+						cookies.removeIf(c->c.startsWith(prefix));
+						m.remove(org.eclipse.jetty.http.HttpHeader.COOKIE); // Remove all and write again
+						if (cookies.size() > 0) {
+							String allCookiesTogether = cookies.stream().collect(Collectors.joining("; "));
+							m.add(new HttpField(org.eclipse.jetty.http.HttpHeader.COOKIE, allCookiesTogether));
+						}
+					}
+				});
 			}
 
 			@Override
@@ -371,6 +399,32 @@ public class HttpProxy implements InitializingBean, DisposableBean {
 				String targetUrl = new URL(tunnel.getTargetProtocol(), tunnel.getTargetDomain(),
 						tunnel.getTargetPort(), clientURL.getFile()).toExternalForm();
 				return targetUrl;
+			}
+			
+			@Override
+			protected void onServerResponseHeaders(HttpServletRequest clientRequest, HttpServletResponse proxyResponse,
+					Response serverResponse) {
+				super.onServerResponseHeaders(clientRequest, proxyResponse, serverResponse);
+				HttpTunnel tunnel = (HttpTunnel) clientRequest.getAttribute(REQUEST_KEY_HTTPTUNNEL);
+				if (tunnel != null) {
+					@SuppressWarnings("unchecked")
+					List<String> clear = (List<String>) clientRequest.getAttribute(REQUEST_KEY_JOATSE_CLEAR_COOKIES);
+					if (clear != null) {
+						Collection<String> currentCookies = proxyResponse.getHeaders("Set-Cookie");
+						List<String> currentCookieNames = currentCookies.stream().map(c->c.split("=", 2)[0]).collect(Collectors.toList());
+						/* Don't remove cookies that are returned by the server */
+						clear.removeIf(c->currentCookieNames.contains(c));
+						for (String name: clear) {
+							Cookie c = new Cookie(name, "");
+							c.setMaxAge(0);
+							proxyResponse.addCookie(c);
+						}
+					}
+					Cookie targetIdCookie = new Cookie(COOKIE_JOATSE_HTTP_TUNNEL_TARGET_ID, tunnel.getTargetId() + "");
+					targetIdCookie.setDomain(tunnel.getCloudHostname());
+					targetIdCookie.setPath("/");
+					proxyResponse.addCookie(targetIdCookie);
+				}
 			}
 			
 			@Override
@@ -433,9 +487,11 @@ public class HttpProxy implements InitializingBean, DisposableBean {
 			@Override
 			protected ContentTransformer newServerResponseContentTransformer(HttpServletRequest clientRequest,
 					HttpServletResponse proxyResponse, Response serverResponse) {
-				JoatseTunnel tunnel = ((HttpTunnel) clientRequest.getAttribute(REQUEST_KEY_HTTPTUNNEL)).getTunnel();
+				HttpTunnel httpTunnel = (HttpTunnel) clientRequest.getAttribute(REQUEST_KEY_HTTPTUNNEL);
+				JoatseTunnel tunnel = httpTunnel.getTunnel();
 				URL clientRequestUrl = IOTools.runUnchecked(()->new URL(serverResponse.getRequest().getURI().toString()));
 				URL proxyRequestUrl = IOTools.runUnchecked(()->new URL(clientRequest.getRequestURL().toString()));
+
 				return new AfterContentTransformer() {
 					@Override
 					public boolean transform(Source source, Sink sink) throws IOException {

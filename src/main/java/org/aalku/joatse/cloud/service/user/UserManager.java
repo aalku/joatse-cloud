@@ -4,6 +4,8 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
@@ -12,8 +14,10 @@ import java.util.UUID;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
+import org.aalku.joatse.cloud.service.user.repository.EmailVerificationTokenRepository;
 import org.aalku.joatse.cloud.service.user.repository.OAuth2IssSubAccountRepository;
 import org.aalku.joatse.cloud.service.user.repository.UserRepository;
+import org.aalku.joatse.cloud.service.user.vo.EmailVerificationToken;
 import org.aalku.joatse.cloud.service.user.vo.JoatseUser;
 import org.aalku.joatse.cloud.service.user.vo.OAuth2IssSubAccount;
 import org.aalku.joatse.cloud.service.user.vo.OAuth2UserWrapper;
@@ -23,6 +27,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
+import org.springframework.security.core.Authentication;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -38,6 +43,7 @@ import org.springframework.security.oauth2.client.userinfo.OAuth2UserService;
 import org.springframework.security.oauth2.core.OAuth2AuthenticationException;
 import org.springframework.security.oauth2.core.oidc.user.OidcUser;
 import org.springframework.security.oauth2.core.user.OAuth2User;
+import org.springframework.security.web.authentication.preauth.PreAuthenticatedAuthenticationToken;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -49,6 +55,9 @@ public class UserManager {
 
 	@Autowired
 	private UserRepository userRepository;
+	
+	@Autowired
+	private EmailVerificationTokenRepository emailVerificationTokenRepository;
 	
 	@Autowired
 	private OAuth2IssSubAccountRepository oauth2IssSubAccountRepository;
@@ -63,16 +72,22 @@ public class UserManager {
 
 	@SuppressWarnings("unchecked")
 	public Optional<JoatseUser> getAuthenticatedUser() {
-		Object principal = SecurityContextHolder.getContext().getAuthentication().getPrincipal();
+		JoatseUser res = null;
+		Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+		Object principal = authentication.getPrincipal();
 		if (principal instanceof JoatseUser) {
-			return Optional.of((JoatseUser) principal);
+			res = (JoatseUser) principal;
 		} else if (principal instanceof Supplier<?>) {
-			JoatseUser joatseUser = ((Supplier<JoatseUser>)principal).get();
-			if (joatseUser != null) {
-				return Optional.of(joatseUser);
-			}
+			res = ((Supplier<JoatseUser>)principal).get();
 		}
-		return Optional.empty();
+		return Optional.ofNullable(res);
+	}
+	
+	private void updateAuthenticatedUser() {
+		getAuthenticatedUser().ifPresent(user -> {
+			SecurityContextHolder.getContext()
+					.setAuthentication(new PreAuthenticatedAuthenticationToken(user, null, user.getAuthorities()));
+		});
 	}
 
 	public OAuth2UserService<OAuth2UserRequest, OAuth2User> getOAuth2UserService() {
@@ -103,15 +118,27 @@ public class UserManager {
 		String sub = oauth2User.getAttribute("sub");
 		if (iss != null && sub != null) {
 			OAuth2IssSubAccount account = oauth2IssSubAccountRepository.findByIssAndSub(iss, sub);
-			if (account != null) {
+			if (account != null && account.getUser() != null) {
 				log.info("Account found: {}", account.getUser());
 				return account.getUser();
 			} else {
 				String email = Optional.ofNullable(oauth2User.getAttribute("email")).map(a -> (String) a)
 						.filter(m -> !m.trim().isEmpty()).orElse(null);
 				if (email != null && adminMailAccounts.contains(email)) {
-					JoatseUser user = userRepository.findByLogin("admin");
-					account = OAuth2IssSubAccount.create(user, iss, sub);
+					JoatseUser user = userRepository.findByLogin(email);
+					if (user == null) {
+						user = JoatseUser.newLocalUser(email, false);
+						userRepository.save(user);
+					}
+					if (!user.getAuthorities().stream().anyMatch(a->a.getAuthority().equals("ROLE_JOATSE_ADMIN"))) {
+						user.addAuthority(new SimpleGrantedAuthority("ROLE_JOATSE_ADMIN"));
+						userRepository.save(user);
+					}
+					if (account == null) {
+						account = OAuth2IssSubAccount.create(user, iss, sub);
+					} else {
+						account.setUser(user);
+					}
 					oauth2IssSubAccountRepository.save(account);
 					log.info("Admin account linked: {} = {}", user, email);
 					return user;
@@ -121,7 +148,7 @@ public class UserManager {
 						log.warn("email prerregistered as user but it exists as account: {}", email);
 						return null; 
 					}
-					user = JoatseUser.newLocalUser(email);
+					user = JoatseUser.newLocalUser(email, false);
 					account = OAuth2IssSubAccount.create(user, iss, sub);					
 					userRepository.save(user);
 					oauth2IssSubAccountRepository.save(account); // Saves user too
@@ -136,7 +163,7 @@ public class UserManager {
 	public JoatseUserDetailsManager userDetailsService() {
 		JoatseUser admin = userRepository.findByLogin("admin");
 		if (admin == null || admin.getPassword() == null || admin.getPassword().trim().isEmpty()) {
-			admin = JoatseUser.newLocalUser("admin");
+			admin = JoatseUser.newLocalUser("admin", false);
 			admin.setPassword(randomPassword(pw->saveTempAdminPassword(pw)));
 			admin.addAuthority(new SimpleGrantedAuthority("ROLE_JOATSE_ADMIN"));
 			userRepository.save(admin);
@@ -228,4 +255,62 @@ public class UserManager {
 				.orElse(false);
 	}
 
+	public UUID newEmailVerificationToken() {
+		JoatseUser user = getAuthenticatedUser().get();
+		emailVerificationTokenRepository.findByUser(user).ifPresent(t->emailVerificationTokenRepository.delete(t));
+		EmailVerificationToken next = new EmailVerificationToken(user);
+		emailVerificationTokenRepository.save(next);
+		log.debug("Saved emailVerificationToken {} for user {}", next.getUuid(), next.getUser());
+		return next.getUuid();
+	}
+
+	public boolean verifyUserEmailWithToken(UUID token) {
+		JoatseUser user = getAuthenticatedUser().get();
+		EmailVerificationToken savedToken = emailVerificationTokenRepository.findByUser(user).orElse(null);
+		log.debug("Loaded emailVerificationToken {} for user {}", Optional.ofNullable(savedToken).map(t->t.getUuid()).orElse(null), user);
+		if (savedToken == null) {
+			log.warn("Token not found {} for user {}", token, user.getUsername());
+			return false;
+		} else if (!savedToken.getCreationTime().plus(1, ChronoUnit.DAYS).isAfter(Instant.now())) {
+			log.warn("emailVerificationToken too old {} for user {}", token, user.getUsername());
+			emailVerificationTokenRepository.delete(savedToken); // Old
+			return false;
+		} else if (savedToken.getUuid().equals(token)) {
+			log.info("Email verification complete for user {}!!!!", user.getUsername());
+			emailVerificationTokenRepository.delete(savedToken); // Correct
+			/* We set the confirmation in the user in session and in the user in db separately, not assumming they are equal */
+			user.setEmailConfirmed();
+			userRepository.findById(user.getUuid()).ifPresent(u->{
+				u.setEmailConfirmed();
+				userRepository.save(u);
+			});
+			updateAuthenticatedUser();
+			return true;
+		} else {
+			log.warn("emailVerificationToken mismatch {} != {} for user {}", token, savedToken.getUuid(), user.getUsername());
+			// Don't delete. It might still be useful and correct if they use it.
+			return false;
+		}
+	}
+
+	/** Allow authenticated user to use the application */
+	public void allowApplicationUse() {
+		JoatseUser user = getAuthenticatedUser().get();
+		user.allowApplicationUse();
+		userRepository.findById(user.getUuid()).ifPresent(u->{
+			u.allowApplicationUse();
+			userRepository.save(u);
+		});
+		updateAuthenticatedUser();
+	}
+
+	public void preventApplicationUse() {
+		JoatseUser user = getAuthenticatedUser().get();
+		user.preventApplicationUse();
+		userRepository.findById(user.getUuid()).ifPresent(u->{
+			u.preventApplicationUse();
+			userRepository.save(u);
+		});
+		updateAuthenticatedUser();
+	}
 }

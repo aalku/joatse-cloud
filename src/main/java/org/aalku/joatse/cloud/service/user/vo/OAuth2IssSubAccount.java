@@ -6,6 +6,8 @@ import java.util.UUID;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
 import jakarta.persistence.ManyToOne;
+import jakarta.persistence.Table;
+import jakarta.persistence.UniqueConstraint;
 
 /**
  * This entity represents an oauth2 account identified by iss and sub
@@ -15,6 +17,7 @@ import jakarta.persistence.ManyToOne;
  * other entities to link them to the JoatseUser.
  */
 @Entity(name = "oauth2IssSubAccount")
+@Table(uniqueConstraints = @UniqueConstraint(columnNames = { "iss", "sub" }))
 public class OAuth2IssSubAccount implements Serializable {
 
 	private static final long serialVersionUID = 1L;
@@ -48,5 +51,9 @@ public class OAuth2IssSubAccount implements Serializable {
 
 	public JoatseUser getUser() {
 		return user;
+	}
+
+	public void setUser(JoatseUser user) {
+		this.user = user;
 	}
 }

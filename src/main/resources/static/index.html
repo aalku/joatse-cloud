@@ -21,136 +21,78 @@
 	<script src="https://unpkg.com/bootstrap-vue@latest/dist/bootstrap-vue.min.js"></script>
 	<!-- Load the following for BootstrapVueIcons support -->
 	<script src="https://unpkg.com/bootstrap-vue@latest/dist/bootstrap-vue-icons.min.js"></script>
+	<script src="./index.js" type="module"></script>
 </head>
 <body>
-<div class="container" id="app">
-	<div><!-- Nav bar -->
-		<b-navbar toggleable="lg" type="dark" variant="dark">
-			<b-navbar-brand href="/">Joatse Cloud</b-navbar-brand>
-			<b-navbar-toggle target="nav-collapse"></b-navbar-toggle>
-			<b-collapse id="nav-collapse" is-nav>
-				<b-navbar-nav class="ml-auto">
-					<b-nav-item href="/admin/users" right v-if="pathname != '/admin/users' && user.isAdmin">Admin users</b-nav-item>
-					<b-nav-item-dropdown right>
-						<template #button-content><em>{{user.nameToAddress}}</em></template>
-						<b-dropdown-item href="/logout">Sign Out</b-dropdown-item>
-					</b-nav-item-dropdown>
-				</b-navbar-nav>
-			</b-collapse>
-		</b-navbar>
-	</div><!-- Nav bar -->
-	<br/>
-	<h2 v-if="!sessions.sessions.length">Welcome to Joatse Cloud</h2>
-	<div v-if="sessions.sessions.length">
-		<h2>Your current sessions</h2>
-		<div class="accordion" role="tablist">
-			<b-card no-body class="mb-1" v-for="(s, iS) in sessions.sessions" :key="s.uuid">
-				<b-card-header header-tag="header" class="p-1" role="tab">
-					<b-button block v-b-toggle.accordion-1 variant="outline-primary">Session from {{s.requesterAddress}} created at {{s.creationTime}}</b-button>
-				</b-card-header>
-				<b-collapse id="accordion-1" accordion="session-accordion" role="tabpanel">
-					<b-card-body>
-						<b-container fluid>
-							<b-row>
-								<b-col sm="4">
-									<label :for="`s-ai-${s.uuid}`">Allowed IP address</label>
-								</b-col>
-								<b-col sm="8">
-									<b-form-input :id="`s-ai-${s.uuid}`" v-model="s.allowedAddress.join(',')" readonly></b-form-input>
-								</b-col>
-							</b-row>
-						</b-container>
-						<b-container fluid>
-							<b-row v-for="(t, it) in s.tcpItems" :key="h.targetId">
-								<b-col sm="4">
-									<label :for="`tcp-s-${t.targetId}`">TCP Socket listening<span v-if="t.targetDescription"> -
-											{{t.targetDescription}}</span></label>
-								</b-col>
-								<b-col sm="8">
-									<b-form-input :id="`tcp-s-${t.targetId}`" v-model="t.description" readonly></b-form-input>
-								</b-col>
-							</b-row>
-						</b-container>
-						<b-container fluid>
-							<b-row v-for="(h, ih) in s.httpItems" :key="h.targetId">
-								<b-col sm="4">
-									<label :for="`http-s-${h.targetId}`">HTTP Tunnel<span v-if="h.targetDescription"> -
-											{{h.targetDescription}}</span></label>
-								</b-col>
-								<b-col sm="8">
-									<b-input-group>
-										<b-form-input :id="`http-s-${h.targetId}`" v-model="h.description" readonly></b-form-input>
-										<b-input-group-append>
-											<b-button variant="outline-secondary" @click="openHttpTunnel(s,h)"><b-icon-caret-right-square/></b-button>
-										</b-input-group-append>
-									</b-input-group>
-								</b-col>
-							</b-row>
-						</b-container>
-					</b-card-body>
-				</b-collapse>
-			</b-card>
+	<div class="container" id="app">
+		<app-header></app-header>
+		<br/>
+		<h2 v-if="!sessions.sessions.length">Welcome to Joatse Cloud</h2>
+		<div v-if="sessions.sessions.length">
+			<h2>Your current sessions</h2>
+			<div class="accordion" role="tablist">
+				<b-card no-body class="mb-1" v-for="(s, iS) in sessions.sessions" :key="s.uuid">
+					<b-card-header header-tag="header" class="p-1" role="tab">
+						<b-button block v-b-toggle.accordion-1 variant="outline-primary">Session from {{s.requesterAddress}} created at {{s.creationTime}}</b-button>
+					</b-card-header>
+					<b-collapse id="accordion-1" accordion="session-accordion" role="tabpanel">
+						<b-card-body>
+							<b-container fluid>
+								<b-row>
+									<b-col sm="4">
+										<label :for="`s-ai-${s.uuid}`">Allowed IP address</label>
+									</b-col>
+									<b-col sm="8">
+										<b-form-input :id="`s-ai-${s.uuid}`" v-model="s.allowedAddress.join(',')" readonly></b-form-input>
+									</b-col>
+								</b-row>
+							</b-container>
+							<b-container fluid>
+								<b-row v-for="(t, it) in s.tcpItems" :key="h.targetId">
+									<b-col sm="4">
+										<label :for="`tcp-s-${t.targetId}`">TCP Socket listening<span v-if="t.targetDescription"> -
+												{{t.targetDescription}}</span></label>
+									</b-col>
+									<b-col sm="8">
+										<b-form-input :id="`tcp-s-${t.targetId}`" v-model="t.description" readonly></b-form-input>
+									</b-col>
+								</b-row>
+							</b-container>
+							<b-container fluid>
+								<b-row v-for="(h, ih) in s.httpItems" :key="h.targetId">
+									<b-col sm="4">
+										<label :for="`http-s-${h.targetId}`">HTTP Tunnel<span v-if="h.targetDescription"> -
+												{{h.targetDescription}}</span></label>
+									</b-col>
+									<b-col sm="8">
+										<b-input-group>
+											<b-form-input :id="`http-s-${h.targetId}`" v-model="h.description" readonly></b-form-input>
+											<b-input-group-append>
+												<b-button variant="outline-secondary" @click="openHttpTunnel(s,h)"><b-icon-caret-right-square/></b-button>
+											</b-input-group-append>
+										</b-input-group>
+									</b-col>
+								</b-row>
+							</b-container>
+						</b-card-body>
+					</b-collapse>
+				</b-card>
+			</div>
 		</div>
+		<div v-else>
+			<p>You don't have open sessions</p>
+			<p>In order to open a session you have to:
+			<ol>
+				<li>Run the joatse-target jar file with some arguments to share a port or resource.</li>
+				<li>Open the confirmation URL you will receive. Open it in the same device that needs to open the connection as the IP
+					address will be registered and it will be the only IP address admited later. If it's other person who need to
+					connect then you can share the URL with them as long as you don't confirm it first.</li>
+				<li>Following the URL log in to the cloud if you are asked to.</li>
+				<li>Review the connection details and accept it.</li>
+			</ol>
+			</p>
+		</div>
+	
 	</div>
-	<div v-else>
-		<p>You don't have open sessions</p>
-		<p>In order to open a session you have to:
-		<ol>
-			<li>Run the joatse-target jar file with some arguments to share a port or resource.</li>
-			<li>Open the confirmation URL you will receive. Open it in the same device that needs to open the connection as the IP
-				address will be registered and it will be the only IP address admited later. If it's other person who need to
-				connect then you can share the URL with them as long as you don't confirm it first.</li>
-			<li>Following the URL log in to the cloud if you are asked to.</li>
-			<li>Review the connection details and accept it.</li>
-		</ol>
-		</p>
-	</div>
-
-</div>
-<script>
-new Vue({
-        el: "#app",
-        data: {
-			user:{},
-			sessions:{sessions:[]}
-        },
-        computed: {
-			pathname() {
-				return new URL(window.location.href).pathname;
-			}
-		},
-        methods: {
-			openHttpTunnel(s, h) {
-				window.open("http://" + h.listenHostname + ':' + h.listenPort + "/", "_blank");
-				return false;
-			}
-        },
-		async created() {
-			let loadData = async ()=> {
-		        await fetch('/user').then(response => response.json())
-	        			.then((data) => this.user = data);
-		        await fetch('/sessions').then(response => response.json())
-	        			.then((data) => {
-							this.sessions.sessions = data.sessions.map(s=>{
-								s.requesterHostname = s.requesterAddress.split(':')[0];
-								s.creationTime = new Date(Date.parse(s.creationTime)).toUTCString();
-								s.tcpItems = s.tcpItems.map(tcp=>{
-									tcp.description = tcp.listenHostname + ':' + tcp.listenPort + ' --> [' + s.requesterHostname + '] --> ' + tcp.targetHostname + ':' + tcp.targetPort;
-									return tcp;
-								});
-								s.httpItems = s.httpItems.map(http=>{
-									http.description = http.listenHostname + ':' + http.listenPort + ' --> [' + s.requesterHostname + '] --> ' + http.targetUrl;
-									return http;
-								});
-								return s;
-							});
-						});
-        	}
-        	await loadData();
-			await $('.collapse.last').collapse('show');
-			setInterval(()=>loadData(), 5000);
-		}
-    });
-</script>
 </body>
 </html>

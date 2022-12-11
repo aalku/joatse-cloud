@@ -49,7 +49,7 @@ public class AdminUserController {
 		for (JoatseUser user: userRepository.findAll()) {
 			List<String> roles = user.getAuthorities().stream().map(a -> a.getAuthority())
 					.filter(a -> a.startsWith("ROLE_JOATSE_")).collect(Collectors.toList());
-			String role = roles.contains("ROLE_JOATSE_USER") ? "USER" : null;
+			String role = "USER";
 			role = roles.contains("ROLE_JOATSE_ADMIN") ? "ADMIN" : role;
 			if (role != null) {
 				list.add(Map.of("UUID", user.getUuid().toString(), "login", user.getUsername(), "canDelete",
@@ -66,7 +66,7 @@ public class AdminUserController {
 		String login = Optional.ofNullable((String) userMap.get("login")).get();
 		String password = Optional.ofNullable((String) userMap.get("password")).get();
 		String role = Optional.ofNullable((String) userMap.get("role")).get();
-		JoatseUser user = JoatseUser.newLocalUser(login);
+		JoatseUser user = JoatseUser.newLocalUser(login, true);
 		user.setPassword(PasswordEncoderFactories.createDelegatingPasswordEncoder().encode(password));
 		if (role.equals("ADMIN")) {
 			user.addAuthority(new SimpleGrantedAuthority("ROLE_JOATSE_ADMIN"));
@@ -84,7 +84,10 @@ public class AdminUserController {
 			throw new IllegalArgumentException("User not found");
 		}
 		String login = Optional.ofNullable((String) userMap.get("login")).get();
-		user.setUserName(login);
+		if (!user.getUsername().equals(login)) {
+			user.setUserName(login);
+			user.setNeedEmailConfirmation();
+		}
 		Optional<String> password = Optional.ofNullable((String) userMap.get("password"));
 		String role = Optional.ofNullable((String) userMap.get("role")).get();
 		if (password.isPresent()) {

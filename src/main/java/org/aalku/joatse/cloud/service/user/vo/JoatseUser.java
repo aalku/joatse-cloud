@@ -1,9 +1,10 @@
 package org.aalku.joatse.cloud.service.user.vo;
 
 import java.io.Serializable;
-import java.util.ArrayList;
 import java.util.Collection;
+import java.util.LinkedHashSet;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -15,14 +16,24 @@ import jakarta.persistence.ElementCollection;
 import jakarta.persistence.Entity;
 import jakarta.persistence.FetchType;
 import jakarta.persistence.Id;
+import jakarta.persistence.Table;
+import jakarta.persistence.UniqueConstraint;
 
 /**
  * Application user. 	
  * This reflects the database record only. OAuth2 details should be elsewhere.
  */
 @Entity(name = "user")
+@Table(uniqueConstraints = @UniqueConstraint(columnNames = { "login" }))
 public class JoatseUser implements UserDetails, Serializable {
 	
+
+	public static final String ROLE_JOATSE_USER = "ROLE_JOATSE_USER";
+
+	public static final String ROLE_JOATSE_USER_PENDING_EMAIL_VERIFICATION = "ROLE_JOATSE_USER_PENDING_EMAIL_VERIFICATION";
+
+	public static final String ROLE_JOATSE_ADMIN = "ROLE_JOATSE_ADMIN";
+
 	@Override
 	public int hashCode() {
 		return Objects.hash(getUuid());
@@ -60,15 +71,19 @@ public class JoatseUser implements UserDetails, Serializable {
 	private String password;
 	
 	@ElementCollection(fetch = FetchType.EAGER)
-	private Collection<String> grantedAuthoritiesList; 
+	private Set<String> grantedAuthoritiesList; 
 	
-	public static JoatseUser newLocalUser(String login) {
+	public static JoatseUser newLocalUser(String login, boolean emailNeedsConfirmation) {
 		JoatseUser user = new JoatseUser();
 		user.uuid = UUID.randomUUID();
 		user.login = login;
 		user.password = null;
-		user.grantedAuthoritiesList = new ArrayList<String>();
-		user.grantedAuthoritiesList.add("ROLE_JOATSE_USER");
+		user.grantedAuthoritiesList = new LinkedHashSet<String>();
+		if (emailNeedsConfirmation) {
+			user.setNeedEmailConfirmation();
+		} else {
+			user.setEmailConfirmed();
+		}
 		return user;
 	}
 	
@@ -140,6 +155,53 @@ public class JoatseUser implements UserDetails, Serializable {
 
 	public void setUserName(String username) {
 		this.login = username;
+	}
+
+	public void setNeedEmailConfirmation() {
+		synchronized (grantedAuthoritiesList) {
+			grantedAuthoritiesList.add(ROLE_JOATSE_USER_PENDING_EMAIL_VERIFICATION);
+			grantedAuthoritiesList.remove(ROLE_JOATSE_USER);
+		}
+	}
+
+	public void setEmailConfirmed() {
+		synchronized (grantedAuthoritiesList) {
+			grantedAuthoritiesList.remove(ROLE_JOATSE_USER_PENDING_EMAIL_VERIFICATION);
+			grantedAuthoritiesList.add(ROLE_JOATSE_USER);
+		}
+	}
+	
+	@Override
+	public String toString() {
+		synchronized (grantedAuthoritiesList) {
+			return "User{" + login + ":" + grantedAuthoritiesList + "}";
+		}
+	}
+
+	private boolean hasAuth(String auth) {
+		return getAuthorities().stream().anyMatch(a->{
+			return a.getAuthority().equals(auth);
+		});
+	}
+
+	public boolean isAdmin() {
+		return hasAuth(ROLE_JOATSE_ADMIN);
+	}
+
+	public boolean isUser() {
+		return hasAuth(ROLE_JOATSE_USER);
+	}
+	
+	public boolean isEmailConfirmationNeeded() {
+		return hasAuth(ROLE_JOATSE_USER_PENDING_EMAIL_VERIFICATION);
+	}
+
+	public void allowApplicationUse() {
+		addAuthority(new SimpleGrantedAuthority(ROLE_JOATSE_USER));
+	}
+
+	public void preventApplicationUse() {
+		removeAuthority(new SimpleGrantedAuthority(ROLE_JOATSE_USER));
 	}
 
 }
