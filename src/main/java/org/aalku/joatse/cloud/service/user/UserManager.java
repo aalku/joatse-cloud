@@ -1,6 +1,8 @@
 package org.aalku.joatse.cloud.service.user;
 
 import java.io.IOException;
+import java.net.MalformedURLException;
+import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
@@ -8,25 +10,32 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Arrays;
 import java.util.List;
+import java.util.NoSuchElementException;
 import java.util.Optional;
 import java.util.Random;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
+import org.aalku.joatse.cloud.config.WebSecurityConfiguration;
 import org.aalku.joatse.cloud.service.user.repository.EmailVerificationTokenRepository;
 import org.aalku.joatse.cloud.service.user.repository.OAuth2IssSubAccountRepository;
+import org.aalku.joatse.cloud.service.user.repository.PasswordResetTokenRepository;
 import org.aalku.joatse.cloud.service.user.repository.UserRepository;
 import org.aalku.joatse.cloud.service.user.vo.EmailVerificationToken;
 import org.aalku.joatse.cloud.service.user.vo.JoatseUser;
 import org.aalku.joatse.cloud.service.user.vo.OAuth2IssSubAccount;
 import org.aalku.joatse.cloud.service.user.vo.OAuth2UserWrapper;
 import org.aalku.joatse.cloud.service.user.vo.OidcUserWrapper;
+import org.aalku.joatse.cloud.service.user.vo.PasswordResetToken;
+import org.aalku.joatse.cloud.tools.io.AsyncEmailSender;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
+import org.springframework.mail.SimpleMailMessage;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
@@ -58,6 +67,9 @@ public class UserManager {
 	
 	@Autowired
 	private EmailVerificationTokenRepository emailVerificationTokenRepository;
+
+	@Autowired
+	private PasswordResetTokenRepository passwordResetTokenRepository;
 	
 	@Autowired
 	private OAuth2IssSubAccountRepository oauth2IssSubAccountRepository;
@@ -67,6 +79,9 @@ public class UserManager {
 	
 	@Value("${account.autoregister.user.emails:}")
 	private List<String> userMailAccounts;
+	
+	@Autowired
+	private AsyncEmailSender asyncEmailSender;
 
 	private Logger log = LoggerFactory.getLogger(UserManager.class);
 
@@ -263,6 +278,65 @@ public class UserManager {
 		log.debug("Saved emailVerificationToken {} for user {}", next.getUuid(), next.getUser());
 		return next.getUuid();
 	}
+	
+	private UUID newPasswordResetToken(JoatseUser user) {
+		passwordResetTokenRepository.findByUser(user).ifPresent(t->passwordResetTokenRepository.delete(t));
+		PasswordResetToken next = new PasswordResetToken(user);
+		passwordResetTokenRepository.save(next);
+		log.debug("Saved passwordResetToken {} for user {}", next.getUuid(), next.getUser());
+		return next.getUuid();
+	}
+	
+	public String newPasswordResetLink(JoatseUser user, String linkBaseUrl) {
+		try {
+			return new URL(new URL(linkBaseUrl), WebSecurityConfiguration.PATH_PASSWORD_RESET + "?token=" + newPasswordResetToken(user)).toExternalForm();
+		} catch (MalformedURLException e) {
+			throw new RuntimeException("Error creating password reset link", e); // Unexpected
+		}
+	}
+
+	
+	public CompletableFuture<Void> sendPasswordResetEmail(String emailAddress, String linkBaseUrl) {
+		JoatseUser user = userRepository.findByLogin(emailAddress);
+		if (user == null) {
+			throw new NoSuchElementException("Couldn't find a user with email " + emailAddress);
+		}
+		String link = this.newPasswordResetLink(user, linkBaseUrl);
+		SimpleMailMessage message = new SimpleMailMessage();
+		message.setSubject("Joatse Cloud password reset");
+		message.setText(
+				"<h1>Joatse Cloud</h1><p>Someone requested a password reset for the Joatse Cloud account " + emailAddress + ". If it wasn't you then you can safely ignore this message. If it was really you then please follow this link to continue:<br /><a href=\""
+						+ link + "\">" + link + "</a></p>");
+		message.setTo(emailAddress);
+		return asyncEmailSender.sendHtml(message);
+	}
+
+	public Optional<JoatseUser> getUserFromChangePasswordToken(UUID tokenUUID) {
+		PasswordResetToken savedToken = passwordResetTokenRepository.findById(tokenUUID).orElse(null);
+		if (savedToken == null) {
+			return Optional.empty();
+		} else if (!savedToken.getCreationTime().plus(1, ChronoUnit.DAYS).isAfter(Instant.now())) {
+			return Optional.empty();
+		} else {
+			return Optional.ofNullable(savedToken.getUser());
+		}
+	}
+
+
+	public void changePasswordWithToken(UUID tokenUUID, String password) {
+		logout();
+		PasswordResetToken savedToken = passwordResetTokenRepository.findById(tokenUUID).orElse(null);
+		if (savedToken == null) {
+			throw new NoSuchElementException("Can't find token: " + tokenUUID);
+		}
+		passwordResetTokenRepository.delete(savedToken);
+		if (!savedToken.getCreationTime().plus(1, ChronoUnit.DAYS).isAfter(Instant.now())) {
+			throw new IllegalArgumentException("Token is too old: " + tokenUUID);
+		}
+		JoatseUser user = savedToken.getUser();
+		user.setPassword(PasswordEncoderFactories.createDelegatingPasswordEncoder().encode(password));
+		userRepository.save(user);
+	}
 
 	public boolean verifyUserEmailWithToken(UUID token) {
 		JoatseUser user = getAuthenticatedUser().get();
@@ -292,7 +366,7 @@ public class UserManager {
 			return false;
 		}
 	}
-
+	
 	/** Allow authenticated user to use the application */
 	public void allowApplicationUse() {
 		JoatseUser user = getAuthenticatedUser().get();
@@ -312,5 +386,33 @@ public class UserManager {
 			userRepository.save(u);
 		});
 		updateAuthenticatedUser();
+	}
+
+	public void logout() {
+		SecurityContextHolder.getContext().setAuthentication(null);
+	}
+
+	public void createUser(JoatseUser user) {
+		userDetailsService().createUser(user);
+	}
+
+	public Iterable<JoatseUser> allUsers() {
+		return userRepository.findAll();
+	}
+
+	public void updateUser(JoatseUser user) {
+		userDetailsService().updateUser(user);
+	}
+
+	public JoatseUser loadUserByUUID(UUID uuid) {
+		return userDetailsService().loadUserByUUID(uuid);
+	}
+
+	public void deleteUser(JoatseUser user) {
+		userDetailsService().deleteUser(user);
+	}
+
+	public boolean isEmailEnabled() {
+		return asyncEmailSender.isEnabled();
 	}
 }

@@ -4,10 +4,12 @@ import java.io.Serializable;
 import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
+import org.aalku.joatse.cloud.tools.io.AsyncEmailSender;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.userdetails.UserDetails;
@@ -202,6 +204,10 @@ public class JoatseUser implements UserDetails, Serializable {
 
 	public void preventApplicationUse() {
 		removeAuthority(new SimpleGrantedAuthority(ROLE_JOATSE_USER));
+	}
+
+	public Optional<String> getEmail() {
+		return Optional.of(login).filter(AsyncEmailSender.PATTERN_EMAIL.asMatchPredicate());
 	}
 
 }

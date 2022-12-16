@@ -3,10 +3,12 @@ package org.aalku.joatse.cloud.web;
 import java.net.URL;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.NoSuchElementException;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ExecutionException;
 
+import org.aalku.joatse.cloud.config.WebSecurityConfiguration;
 import org.aalku.joatse.cloud.service.user.UserManager;
 import org.aalku.joatse.cloud.service.user.vo.JoatseUser;
 import org.aalku.joatse.cloud.tools.io.AsyncEmailSender;
@@ -21,8 +23,11 @@ import org.springframework.security.oauth2.client.registration.ClientRegistratio
 import org.springframework.security.oauth2.client.web.OAuth2AuthorizationRequestRedirectFilter;
 import org.springframework.stereotype.Controller;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseBody;
+import org.springframework.web.server.ResponseStatusException;
 
 @Controller
 public class JoatseLoginController implements InitializingBean {
@@ -55,7 +60,7 @@ public class JoatseLoginController implements InitializingBean {
 	 * email verification or otherwise just let the user use the app.
 	 * 
 	 */
-	@GetMapping("/postLogin")
+	@GetMapping(WebSecurityConfiguration.PATH_POST_LOGIN)
 	public String postLogin(jakarta.servlet.http.HttpSession session) {
 		if (session.getAttribute(ConfirmController.CONFIRM_SESSION_KEY_HASH) != null) {
 			/* We are confirming a request */
@@ -84,7 +89,7 @@ public class JoatseLoginController implements InitializingBean {
 		}
 	}
 	
-	@GetMapping("/postLogin/emailVerification")
+	@GetMapping(WebSecurityConfiguration.PATH_POST_LOGIN + "/emailVerification")
 	public String emailVerification(jakarta.servlet.http.HttpServletRequest request, @RequestParam(required = false) UUID token) throws Exception {
 		JoatseUser user = userManager.getAuthenticatedUser().get();
 		if (!user.isEmailConfirmationNeeded()) {
@@ -99,22 +104,84 @@ public class JoatseLoginController implements InitializingBean {
 			if (userManager.verifyUserEmailWithToken(token)) {
 				return "redirect:/";
 			} else {
-				return "forward:/emailVer-failed.html";
+				return "forward:/userManagement/emailVer-failed.html";
 			}
 		} else {
-			SimpleMailMessage message = new SimpleMailMessage();
-			token = userManager.newEmailVerificationToken();
-			String link = new URL(new URL(request.getRequestURL().toString()), "/postLogin/emailVerification?token=" + token).toExternalForm();
-			message.setSubject("Joatse email address verification");
-			message.setText("Please confirm this is your email address and you are creating a Joatse account by visiting this link: " + link);
-			message.setTo(to);
 			try {
-				asyncEmailSender.send(message).get();
+				SimpleMailMessage message = new SimpleMailMessage();
+				token = userManager.newEmailVerificationToken();
+				String link = new URL(new URL(request.getRequestURL().toString()), "/postLogin/emailVerification?token=" + token).toExternalForm();
+				message.setSubject("Joatse Cloud email address verification");
+				message.setText(
+						"<h1>Joatse Cloud</h1><p>Please confirm this is your email address and you are creating a Joatse Cloud account by visiting this link:<br /><a href=\""
+								+ link + "\">" + link + "</a></p>");
+				message.setTo(to);
+				asyncEmailSender.sendHtml(message).get();
 			} catch (InterruptedException | ExecutionException e) {
 				throw e;
 			}
-			return "forward:/emailVer-w8-4it.html";
+			return "forward:/userManagement/emailVer-w8-4it.html";
 		}
+	}
+	
+	/**
+	 * Prompt for details to reset password.
+	 */
+	@GetMapping(WebSecurityConfiguration.PATH_PASSWORD_RESET)
+	public String passwordResetPage(jakarta.servlet.http.HttpServletRequest request) throws Exception {
+		return "forward:/resetPassword/resetPassword.html";
+	}
+
+	/**
+	 * Password reset steps.
+	 */
+	@PostMapping(WebSecurityConfiguration.PATH_PASSWORD_RESET)
+	@ResponseBody
+	public Map<String, Object> passwordResetAction(jakarta.servlet.http.HttpServletRequest request,
+			@RequestBody Map<String, Object> payload) throws Exception {
+		log.debug("passwordResetAction - Payload: {}", payload);
+		Map<String, Object> res = new LinkedHashMap<>();
+		Optional<String> email = Optional.ofNullable(payload.get("email")).map(v -> v.toString());
+		Optional<UUID> token = Optional.ofNullable(payload.get("token")).map(v -> v.toString()).map(u->UUID.fromString(u));
+		Optional<String> password = Optional.ofNullable(payload.get("password")).map(v -> v.toString());
+		if (email.isPresent() && !token.isPresent() && !password.isPresent()) {
+			if (asyncEmailSender.isEnabled()) {
+				String emailAddress = email.get();
+				try {
+					userManager.sendPasswordResetEmail(emailAddress, request.getRequestURL().toString()).get();
+					res.put("result", "success");
+					res.put("msg", "reset email sent");
+				} catch (NoSuchElementException e) {
+					res.put("result", "error");
+					res.put("msg", "The entered email does not identify an user");
+				} catch (Exception e) {
+					res.put("result", "error");
+					res.put("msg", "There was an error sending the reset email");
+				}
+			} else {
+				res.put("result", "error");
+				res.put("msg", "The email system is not available. The system administrator should send you a password reset link as soon as possible.");
+			}
+		} else if (token.isPresent()) {
+			if (password.isPresent()) {
+				userManager.changePasswordWithToken(token.get(), password.get());
+				res.put("result", "success");
+				res.put("msg", "Password reset success");
+			} else {
+				Optional<JoatseUser> user = userManager.getUserFromChangePasswordToken(token.get());
+				if (user.isPresent()) {
+					res.put("result", "success");
+					res.put("username", user.get().getUsername());
+				} else {
+					res.put("result", "error");
+					res.put("msg", "Invalid token");
+				}
+			}
+		} else {
+			throw new IllegalArgumentException("Payload is not as expected");
+		}
+		log.debug("passwordResetAction - response: {}", res);
+		return res;
 	}
 
 	@GetMapping(path = "/loginForm/options", produces = "application/json")
@@ -160,11 +227,14 @@ public class JoatseLoginController implements InitializingBean {
 	@GetMapping("/user")
 	@ResponseBody
 	public Map<String, Object> getUser() {
-		JoatseUser user = userManager.getAuthenticatedUser().orElseThrow();
-		return Map.of(
-				"nameToAddress", user.getUsername(),
-				"isAdmin", user.isAdmin()
-			);
+		JoatseUser user = userManager.getAuthenticatedUser().orElse(null);
+		if (user != null) {
+			return Map.of(
+					"nameToAddress", user.getUsername(),
+					"isAdmin", user.isAdmin()
+				);
+		} else {
+			throw new ResponseStatusException(org.springframework.http.HttpStatus.NOT_FOUND, "User not logged in");
+		}
 	}
-
 }

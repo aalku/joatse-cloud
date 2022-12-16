@@ -10,25 +10,17 @@ const App = {
 		fields: [{ key: 'UUID', label: 'UUID' }, 'login', 'role', { key: 'actions', label: 'Actions' }],
 		editingUser: null,
 		editUserTitle: null,
-		passwordMandatory: null,
 		validated: false,
-		roles: { "USER": "User", "ADMIN": "Admin" }
+		roles: { "USER": "User", "ADMIN": "Admin" },
+		sentPasswordResetEmailAlert: false,
+		showPasswordResetLink: null
 	},
 	computed: {
 		loginState() {
 			return !!this.editingUser?.login?.match(/^(?:[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*|"(?:[\x01-\x08\x0b\x0c\x0e-\x1f\x21\x23-\x5b\x5d-\x7f]|\\[\x01-\x09\x0b\x0c\x0e-\x7f])*")@(?:(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]*[a-z0-9])?|\[(?:(?:(2(5[0-5]|[0-4][0-9])|1[0-9][0-9]|[1-9]?[0-9]))\.){3}(?:(2(5[0-5]|[0-4][0-9])|1[0-9][0-9]|[1-9]?[0-9])|[a-z0-9-]*[a-z0-9]:(?:[\x01-\x08\x0b\x0c\x0e-\x1f\x21-\x5a\x53-\x7f]|\\[\x01-\x09\x0b\x0c\x0e-\x7f])+)\])$/);
 		},
-		passwordState() {
-			if (!this.passwordMandatory && !this.editingUser.password) {
-				return true;
-			}
-			return !!this.editingUser?.password?.match(/^\S.{6,}\S$/);
-		},
-		passwordConfirmState() {
-			return this.editingUser?.password == this.editingUser?.password2;
-		},
 		formValid() {
-			return this.loginState && this.passwordState && this.passwordConfirmState;
+			return this.loginState;
 		},
 		pathname() {
 			return new URL(window.location.href).pathname;
@@ -48,14 +40,12 @@ const App = {
 			this.editingUser = { ...user };
 			this.validated = false;
 			this.editUserTitle = `Edit user '${this.editingUser?.login}'`;
-			this.passwordMandatory = false;
 			this.$refs.editUserModal.show();
 		},
 		async addUser() {
 			this.editingUser = { role: "USER" };
 			this.validated = false;
 			this.editUserTitle = 'Create user';
-			this.passwordMandatory = true;
 			this.$refs.editUserModal.show();
 		},
 		editUserModalOk(bvModalEvent) {
@@ -79,9 +69,6 @@ const App = {
 		async saveUser(user) {
 			console.log("Saving data...", user);
 			let u = { login: user.login, role: user.role };
-			if (user.password) {
-				u.password = user.password;
-			}
 			let res = null;
 			let body = null;
 			let error = null;
@@ -142,6 +129,41 @@ const App = {
 					console.error("delete?", err);
 					this.$refs.users.refresh();
 				})
+		},
+		async resetPassword(user) {
+			let result = await this.$bvModal.msgBoxConfirm('Please confirm that you want to reset the password of the user ' + user.login, {
+				title: 'Please Confirm',
+				size: 'sm',
+				buttonSize: 'sm',
+				okVariant: 'danger',
+				okTitle: 'Reset password',
+				cancelTitle: 'Cancel',
+				footerClass: 'p-2',
+				hideHeaderClose: false,
+				centered: true
+			})
+				.then(async value => {
+					console.info("resetPassword?", value)
+					if (value) {
+						let response = await fetch('/admin/users/' + user.UUID + '/resetPassword', { method: 'POST' });
+						this.$refs.users.refresh();
+						return response.ok ? await response.json() : null;
+					}
+					return null;
+				})
+				.catch(err => {
+					console.error("resetPassword?", err);
+					this.$refs.users.refresh();
+					return null;
+				})
+			console.info("resetPassword link", result);
+			if (result?.result == 'linkSent') {
+				this.sentPasswordResetEmailAlert = 5;
+			} else if (result?.result == 'gotSomeLink') {
+				this.showPasswordResetLink = result.link;
+				this.$refs.showPasswordResetLinkModal.show();
+			}
+			// TODO
 		},
 	},
 	async created() {

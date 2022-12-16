@@ -13,6 +13,7 @@ import org.springframework.boot.web.context.WebServerInitializedEvent;
 import org.springframework.context.ApplicationListener;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -34,7 +35,8 @@ public class WebSecurityConfiguration {
 
 	public static final String PATH_LOGIN_FORM = "/loginForm";
 	public static final String PATH_LOGIN_POST = "/loginPost";
-	private static final String PATH_POST_LOGIN = "/postLogin";
+	public static final String PATH_POST_LOGIN = "/postLogin";
+	public static final String PATH_PASSWORD_RESET = "/resetPassword";
 	
 	@SuppressWarnings("unused")
 	private Logger log = LoggerFactory.getLogger(WebSecurityConfiguration.class);
@@ -65,9 +67,14 @@ public class WebSecurityConfiguration {
 			.authorizeHttpRequests()
 				.requestMatchers(WebSocketConfig.CONNECTION_HTTP_PATH).anonymous()
 				.requestMatchers(PATH_LOGIN_FORM, PATH_LOGIN_FORM + "/**", PATH_LOGIN_POST).permitAll()
+				.requestMatchers(PATH_PASSWORD_RESET, PATH_PASSWORD_RESET + "/**").permitAll()
 				.requestMatchers(PATH_POST_LOGIN, PATH_POST_LOGIN + "/**").authenticated() // But not any specific auth
-				.requestMatchers("/css/*.css").permitAll()
+				.requestMatchers(HttpMethod.GET,"/header.js").permitAll()
+				.requestMatchers(HttpMethod.GET,"/lib/*.js").permitAll()
+				.requestMatchers(HttpMethod.GET,"/css/*.css").permitAll()
 				.requestMatchers("/CF", "/CF/2").permitAll()
+				.requestMatchers(HttpMethod.GET, "/user").permitAll()
+				.requestMatchers("/error").permitAll()
 				.requestMatchers("/").authenticated() // But not any specific auth
 				.anyRequest().hasRole("JOATSE_USER") // You must be an enabled user for anything else
         	.and()

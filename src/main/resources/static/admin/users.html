@@ -13,9 +13,9 @@
 		integrity="sha384-xOolHFLEh07PJGoPkLv1IbcEPTNtaed2xpHsD9ESMhqIYd0nLMwNLD69Npy4HI+N" crossorigin="anonymous">
 	<!-- BootstapVue -->
 	<link type="text/css" rel="stylesheet" href="https://unpkg.com/bootstrap-vue@latest/dist/bootstrap-vue.min.css" />
-	<script src="https://unpkg.com/bootstrap-vue@latest/dist/bootstrap-vue.min.js"></script>
+	<script src="/lib/bootstrap-vue.min.js"></script>
 	<!-- Load the following for BootstrapVueIcons support -->
-	<script src="https://unpkg.com/bootstrap-vue@latest/dist/bootstrap-vue-icons.min.js"></script>
+	<script src="/lib/bootstrap-vue-icons.min.js"></script>
 	<script src="/admin/users.js" type="module"></script>
 </head>
 
@@ -24,6 +24,7 @@
 		<app-header></app-header>
 		<br/>
 		<h2>User administration</h2>
+		<b-alert variant="success" :show="sentPasswordResetEmailAlert">email sent!!</b-alert>
 		<b-table
 			:fields="fields"
 			:items="userProvider"
@@ -37,6 +38,7 @@
 			</template>
 			<template #cell(actions)="data">
 				<a href="#" v-if="data.item.canDelete" @click="editUser(data.item)"><b-icon-pencil-square></b-icon-pencil-square></a>
+				<a href="#" @click="resetPassword(data.item)"><b-icon-key></b-icon-key></a>
 				<a href="#" v-if="data.item.canDelete" @click="deleteUser(data.item)"><b-icon-trash></b-icon-trash></a>
 			</template>
 			<template #foot()="data">
@@ -49,30 +51,19 @@
 		<b-modal ref="editUserModal" :title="this.editUserTitle" @ok="editUserModalOk" @hidden="editUserModalReset" :ok-disabled="!formValid">
 	  		<b-form @submit.stop.prevent v-if="editingUser">
 				<div>
-			        <label for="login">Login</label>
-					<b-form-input
-			          id="login"
-			          v-model="editingUser.login"
-			          type="text"
-			          required
-			          :state="loginState"
-			        ></b-form-input>
-					<label for="role">Role</label>
-					<b-form-select id="role" v-model="editingUser.role" :options="roles"></b-form-select>
-				</div>
-				<div>
-				    <label for="password">Password</label>
-				    <b-form-input type="password" id="password" v-model="editingUser.password" aria-describedby="password-help-block" :state="passwordState"></b-form-input>
-		    		<label v-if="editingUser.password?.length" for="password2">Confirm password</label>
-				    <b-form-input v-if="editingUser.password?.length" type="password" id="password2" v-model="editingUser.password2" aria-describedby="password-help-block" :state="passwordConfirmState"></b-form-input>
-				    <b-form-text id="password-help-block">
-				      Your password must be 8-20 characters long, contain letters and numbers, and must not
-				      contain spaces, special characters, or emoji.
-				    </b-form-text>
+					<b-form-group label="Username" label-for="username" :state="loginState">
+						<b-form-input id="username" v-model="editingUser.login" type="text" required></b-form-input>
+					</b-form-group>
+					<b-form-group label="Role" label-for="role">
+						<b-form-select id="role" v-model="editingUser.role" :options="roles"></b-form-select>
+					</b-form-group>
 				</div>
 			</b-form>
 		</b-modal>
-	
+		<b-modal ref="showPasswordResetLinkModal" :title="'Password reset link'" ok-only>
+			<p>Send this link to the user so they can reset their password:</p>
+			<a :href="showPasswordResetLink">{{showPasswordResetLink}}</a>
+		</b-modal>
 	</div>
 </body>
 

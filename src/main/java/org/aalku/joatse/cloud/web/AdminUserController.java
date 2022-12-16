@@ -6,10 +6,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.ExecutionException;
 import java.util.stream.Collectors;
 
-import org.aalku.joatse.cloud.service.user.JoatseUserDetailsManager;
-import org.aalku.joatse.cloud.service.user.repository.UserRepository;
+import org.aalku.joatse.cloud.service.user.UserManager;
 import org.aalku.joatse.cloud.service.user.vo.JoatseUser;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.access.annotation.Secured;
@@ -30,23 +30,19 @@ import org.springframework.web.bind.annotation.ResponseBody;
 public class AdminUserController {
 	
 	@Autowired
-	private UserRepository userRepository;
-	
-	@Autowired
-	private JoatseUserDetailsManager userDetailsManager;
+	private UserManager userManager;
 	
 	@GetMapping("/admin/users")
 	public String greeting(Model model) {
 		return "forward:/admin/users.html";
 	}
 	
-	
 	@GetMapping("/admin/users/list")
 	@ResponseBody
 	public Map<String, Object> listUsers() {
 		Map<String, Object> res = new LinkedHashMap<>();
 		ArrayList<Map<String, Object>> list = new ArrayList<Map<String, Object>>();
-		for (JoatseUser user: userRepository.findAll()) {
+		for (JoatseUser user: userManager.allUsers()) {
 			List<String> roles = user.getAuthorities().stream().map(a -> a.getAuthority())
 					.filter(a -> a.startsWith("ROLE_JOATSE_")).collect(Collectors.toList());
 			String role = "USER";
@@ -71,7 +67,7 @@ public class AdminUserController {
 		if (role.equals("ADMIN")) {
 			user.addAuthority(new SimpleGrantedAuthority("ROLE_JOATSE_ADMIN"));
 		}
-		userDetailsManager.createUser(user);
+		userManager.createUser(user);
 		return Map.of("result", "User created OK");
 	}
 	
@@ -79,7 +75,7 @@ public class AdminUserController {
 	@ResponseBody
 	public Map<String, Object> putUser(@RequestBody Map<String, Object> userMap) {
 		UUID uuid = Optional.ofNullable((String) userMap.get("UUID")).map(u->UUID.fromString(u)).get();
-		JoatseUser user = userDetailsManager.loadUserByUUID(uuid);
+		JoatseUser user = userManager.loadUserByUUID(uuid);
 		if (user == null) {
 			throw new IllegalArgumentException("User not found");
 		}
@@ -98,19 +94,37 @@ public class AdminUserController {
 		} else {
 			user.removeAuthority(new SimpleGrantedAuthority("ROLE_JOATSE_ADMIN"));
 		}
-		userDetailsManager.updateUser(user);
+		userManager.updateUser(user);
 		return Map.of("result", "User updated OK");
 	}
 
 	@DeleteMapping("/admin/users/{uuid}")
 	@ResponseBody
 	public Map<String, Object> deleteUser(@PathVariable(value="uuid") UUID uuid) {
-		JoatseUser user = userDetailsManager.loadUserByUUID(uuid);
+		JoatseUser user = userManager.loadUserByUUID(uuid);
 		if (user == null) {
 			throw new IllegalArgumentException("User not found");
 		}
-		userDetailsManager.deleteUser(user);
+		userManager.deleteUser(user);
 		return Map.of("result", "User deleted OK");
 	}
+	
+	@PostMapping("/admin/users/{uuid}/resetPassword")
+	@ResponseBody
+	public Map<String, Object> resetPassword(jakarta.servlet.http.HttpServletRequest request, @PathVariable(value="uuid") UUID uuid) throws InterruptedException, ExecutionException {
+		JoatseUser user = userManager.loadUserByUUID(uuid);
+		if (user == null) {
+			throw new IllegalArgumentException("User not found");
+		}
+		Optional<String> email = user.getEmail();
+		String baseUrl = request.getRequestURL().toString();
+		if (email.isPresent() && userManager.isEmailEnabled()) {
+			userManager.sendPasswordResetEmail(email.get(), baseUrl).get();
+			return Map.of("result", "linkSent");
+		} else {
+			return Map.of("result", "gotSomeLink", "link", userManager.newPasswordResetLink(user, baseUrl));
+		}
+	}
+
 
 }
