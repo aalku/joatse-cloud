@@ -27,6 +27,7 @@ public class WebSocketSendWorker extends Thread {
 
 	private BlockingQueue<Item> queue;
 	private WebSocketSession session;
+	private BandwithLimiter bandwithLimiter;
 
 	public WebSocketSendWorker(WebSocketSession session) {
 		this.session = session;
@@ -48,6 +49,7 @@ public class WebSocketSendWorker extends Thread {
 				Item item = queue.take();
 				try {
 					session.sendMessage(item.message);
+					bandwithLimiter.next(item.message.getPayloadLength()).sleep();
 				} catch (Exception e) {
 					item.future.completeExceptionally(e);
 					continue;
@@ -62,6 +64,10 @@ public class WebSocketSendWorker extends Thread {
 	
 	public void close() {
 		this.interrupt();
+	}
+
+	public void setBandwithLimiter(BandwithLimiter bandwithLimiter) {
+		this.bandwithLimiter = bandwithLimiter;
 	}
 
 }

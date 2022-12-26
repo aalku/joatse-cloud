@@ -13,12 +13,28 @@
 
 	<logger name="org.aalku.joatse" level="DEBUG" />
 	<logger name="org.aalku.joatse.cloud.proxy.jetty" level="DEBUG" />
+	<logger name="org.aalku.joatse.cloud.tools.io.BandwithLimiter" level="INFO" />
 	
 	<logger name="org.eclipse.jetty.io" level="INFO" />
 	
 	<logger name="org.eclipse.jetty.proxy.AsyncProxyServlet" level="INFO" />
 	
+    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>joatse.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>joatse.%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
+            <maxFileSize>10MB</maxFileSize>
+            <totalSizeCap>500MB</totalSizeCap>
+            <maxHistory>10</maxHistory>
+        </rollingPolicy>
+        <encoder>
+            <pattern>%d %p %c{1} [%t] %m%n</pattern>
+        </encoder>
+    </appender>
+
+	
 	<root level="INFO">
 		<appender-ref ref="STDOUT" />
+		<appender-ref ref="FILE" />
 	</root>
 </configuration>

@@ -210,4 +210,9 @@ public class JoatseUser implements UserDetails, Serializable {
 		return Optional.of(login).filter(AsyncEmailSender.PATTERN_EMAIL.asMatchPredicate());
 	}
 
+	public Optional<Long> getBandwithLimit() {
+		// TODO Auto-generated method stub
+		return Optional.empty();
+	}
+
 }

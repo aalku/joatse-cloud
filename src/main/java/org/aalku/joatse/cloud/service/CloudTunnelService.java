@@ -10,33 +10,22 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Random;
-import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
-import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import org.aalku.joatse.cloud.config.ListenerConfigurationDetector;
-import org.aalku.joatse.cloud.config.WebSocketConfig;
-import org.aalku.joatse.cloud.service.CloudTunnelService.JoatseTunnel.TcpTunnel;
 import org.aalku.joatse.cloud.service.HttpProxy.HttpTunnel;
 import org.aalku.joatse.cloud.service.user.repository.UserRepository;
 import org.aalku.joatse.cloud.service.user.vo.JoatseUser;
-import org.aalku.joatse.cloud.tools.io.AsyncTcpPortListener;
-import org.aalku.joatse.cloud.tools.io.AsyncTcpPortListener.Event;
-import org.aalku.joatse.cloud.tools.io.IOTools;
 import org.aalku.joatse.cloud.tools.io.PortRange;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -44,7 +33,6 @@ import org.springframework.beans.factory.DisposableBean;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.util.UriComponentsBuilder;
 
@@ -88,10 +76,12 @@ public class CloudTunnelService implements InitializingBean, DisposableBean {
 	
 	public static class TunnelRequestHttpItem extends TunnelRequestItem {
 		public final URL targetUrl;
-		public TunnelRequestHttpItem(long targetId, String targetDescription, URL targetUrl) {
+		public final boolean unsafe; // Allow unsafe https
+		public TunnelRequestHttpItem(long targetId, String targetDescription, URL targetUrl, boolean unsafe) {
 			super(targetId, targetDescription, targetUrl.getHost(),
 					Optional.of(targetUrl.getPort()).map(p -> p <= 0 ? targetUrl.getDefaultPort() : p).get());
 			this.targetUrl = targetUrl;
+			this.unsafe = unsafe;
 		}
 	}
 
@@ -101,7 +91,7 @@ public class CloudTunnelService implements InitializingBean, DisposableBean {
 		private final Collection<TunnelRequestItem> items;
 		private final Instant creationTime;
 		public final CompletableFuture<TunnelCreationResult> future = new CompletableFuture<>();
-		private Collection<InetAddress> allowedAddress;
+		private Collection<InetAddress> allowedAddresses;
 
 		public TunnelRequest(InetSocketAddress connectionRequesterAddress, Collection<TunnelRequestItem> tunnelItems) {
 			this.requesterAddress = connectionRequesterAddress;
@@ -121,16 +111,16 @@ public class CloudTunnelService implements InitializingBean, DisposableBean {
 			return future;
 		}
 
-		public void setAllowedAddress(Collection<InetAddress> allowedAddress) {
-			this.allowedAddress = allowedAddress;
+		public void setAllowedAddresses(Collection<InetAddress> allowedAddress) {
+			this.allowedAddresses = allowedAddress;
 		}
 
 		public UUID getUuid() {
 			return uuid;
 		}
 
-		public Collection<InetAddress> getAllowedAddress() {
-			return allowedAddress;
+		public Collection<InetAddress> getAllowedAddresses() {
+			return allowedAddresses;
 		}
 
 		public Collection<TunnelRequestItem> getItems() {
@@ -142,7 +132,13 @@ public class CloudTunnelService implements InitializingBean, DisposableBean {
 	public static class JoatseTunnel {
 
 		public class TcpTunnel {
-			public final int listenPort;
+			public class ListenAddress {
+				private final int listenPort;
+				public ListenAddress(int listenPort) {
+					this.listenPort = listenPort;
+				}
+			}
+			private final Map<InetAddress, TcpTunnel.ListenAddress> listenAddresses = new LinkedHashMap<>();
 			/**
 			 * Random target port id, to id target tuple [host, port]
 			 */
@@ -150,9 +146,8 @@ public class CloudTunnelService implements InitializingBean, DisposableBean {
 			public final String targetDescription;
 			public final String targetHostname;
 			public final int targetPort;
-			public TcpTunnel(int listenPort, TunnelRequestTcpItem req) {
+			public TcpTunnel(TunnelRequestTcpItem req) {
 				this.targetId = req.targetId;
-				this.listenPort = listenPort;
 				this.targetDescription = req.targetDescription;
 				this.targetHostname = req.targetHostname;
 				this.targetPort = req.targetPort;
@@ -160,12 +155,32 @@ public class CloudTunnelService implements InitializingBean, DisposableBean {
 			public JoatseTunnel getTunnel() {
 				return JoatseTunnel.this;
 			}
+			public synchronized boolean matches(InetAddress remoteAddress, int serverPort) {
+				return Optional.ofNullable(listenAddresses.get(remoteAddress)).filter(x -> x.listenPort == serverPort)
+						.isPresent();
+			}
+			public synchronized void registerListenAllowedAddress(InetAddress allowedAddress, int serverPort) {
+				if (listenAddresses.containsKey(allowedAddress)) {
+					throw new IllegalStateException("You can allow each address only once");
+				} else {
+					listenAddresses.put(allowedAddress, new ListenAddress(serverPort));
+				}
+			}
+			public synchronized void unregisterListenAllowedAddress(InetAddress allowedAddress) {
+				if (listenAddresses.remove(allowedAddress) != null) {
+					throw new IllegalStateException("You can only remove allowed addresses");
+				}
+			}
+			public synchronized Map<InetAddress, Integer> getListenAddressess() {
+				return listenAddresses.entrySet().stream()
+						.collect(Collectors.toMap(e -> e.getKey(), e -> e.getValue().listenPort));
+			}
 		}
 
 		private final JoatseUser owner;
 		private final UUID uuid;
 		private final String cloudPublicHostname;
-		private Collection<InetAddress> allowedAddress;
+		private Collection<InetAddress> allowedAddresses;
 		private final InetSocketAddress requesterAddress;
 		private final Instant creationTime;
 		/**
@@ -174,15 +189,13 @@ public class CloudTunnelService implements InitializingBean, DisposableBean {
 		private BiConsumer<Long, AsynchronousSocketChannel> tcpConnectionListener;
 		private Collection<TcpTunnel> tcpItems = new ArrayList<>(1);
 		private Collection<HttpTunnel> httpItems = new ArrayList<>(1);
-		private Map<String, String> urlRewriteMap = new LinkedHashMap<>();
-		private Map<String, String> urlReverseRewriteMap = new LinkedHashMap<>();
 
 		public JoatseTunnel(JoatseUser owner, TunnelRequest request, String cloudPublicHostname) {
 			this.owner = owner;
 			this.uuid = request.getUuid();
 			this.cloudPublicHostname = cloudPublicHostname;
 			this.requesterAddress = request.requesterAddress;
-			this.allowedAddress = request.getAllowedAddress();
+			this.allowedAddresses = request.getAllowedAddresses();
 			this.creationTime = request.getCreationTime();
 		}
 
@@ -190,8 +203,8 @@ public class CloudTunnelService implements InitializingBean, DisposableBean {
 			this.tcpConnectionListener = tcpConnectionListener;
 		}
 
-		public Collection<InetAddress> getAllowedAddress() {
-			return allowedAddress;
+		public Collection<InetAddress> getAllowedAddresses() {
+			return allowedAddresses;
 		}
 
 		public InetSocketAddress getRequesterAddress() {
@@ -210,32 +223,13 @@ public class CloudTunnelService implements InitializingBean, DisposableBean {
 			return owner;
 		}
 
-		public void addTcpItem(int port, TunnelRequestTcpItem r) {
-			TcpTunnel i = new TcpTunnel(port, r);
+		public TcpTunnel addTcpItem(TunnelRequestTcpItem r) {
+			TcpTunnel i = new TcpTunnel(r);
 			tcpItems.add(i);
+			return i;
 		}
 		
 		public void addHttpItem(HttpTunnel item) {
-			URL tau = item.getTargetURL();
-			int port = IOTools.getPort(tau);
-			String protocol = tau.getProtocol();
-			String host = tau.getHost();
-			boolean portOptional = (port == 80 && protocol.equals("http")) || port == 443 && protocol.equals("https");
-			
-			String taus1 = protocol + "://" + host + ":" + port;
-			Optional<String> taus2 = portOptional ? Optional.of(protocol + "://" + host) : Optional.empty();
-			
-			String tuu = item.getCloudProtocol() + "://" + item.getCloudHostname() + ":" + item.getListenPort();
-			
-			// FIXME tuu might have an optional port too
-			
-			urlRewriteMap.put(taus1, tuu);
-			if (taus2.isPresent()) {
-				urlRewriteMap.put(taus2.get(), tuu);
-				urlReverseRewriteMap.put(tuu, taus2.get());
-			} else {
-				urlReverseRewriteMap.put(tuu, taus1);
-			}
 			httpItems.add(item);
 		}
 
@@ -270,14 +264,6 @@ public class CloudTunnelService implements InitializingBean, DisposableBean {
 		 */
 		public void tunnelTcpConnection(long targetId, AsynchronousSocketChannel channel) {
 			tcpConnectionListener.accept(targetId, channel);
-		}
-
-		public Function<String, String> getUrlRewriteFunction() {
-			return u->urlRewriteMap.getOrDefault(u, u);
-		}
-
-		public Function<String, String> getUrlReverseRewriteFunction() {
-			return u->urlReverseRewriteMap.getOrDefault(u, u);
 		}
 	}
 
@@ -359,12 +345,9 @@ public class CloudTunnelService implements InitializingBean, DisposableBean {
 		};
 	}
 
-	private Logger log = LoggerFactory.getLogger(WebSocketConfig.class);
+	private Logger log = LoggerFactory.getLogger(CloudTunnelService.class);
 
 	private ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
-
-	@Value("${server.hostname.listen:0.0.0.0}")
-	private String listenHostname;
 
 	@Autowired
 	private ListenerConfigurationDetector webListenerConfiguration;
@@ -380,12 +363,6 @@ public class CloudTunnelService implements InitializingBean, DisposableBean {
 	private TunnelRegistry tunnelRegistry;
 
 	private final AtomicBoolean shuttingDown = new AtomicBoolean(false);
-
-	/**
-	 * Map of open server sockets. Remember there can be several connections from
-	 * different users on the same port.
-	 */
-	private Map<Integer, AsyncTcpPortListener<Void>> openPortMap = new LinkedHashMap<>();
 
 	/**
 	 * Requested connections not confirmed yet
@@ -429,7 +406,7 @@ public class CloudTunnelService implements InitializingBean, DisposableBean {
 				public void run() {
 					try {
 						Thread.sleep(500);
-						request.setAllowedAddress(Arrays.asList(InetAddress.getAllByName("localhost"))); // TODO
+						request.setAllowedAddresses(Arrays.asList(InetAddress.getAllByName("localhost"))); // TODO
 						acceptTunnelRequest(request.uuid, userRepository.findByLogin(automaticTunnelAcceptance));
 					} catch (InterruptedException e) {
 					} catch (UnknownHostException e) {
@@ -467,7 +444,7 @@ public class CloudTunnelService implements InitializingBean, DisposableBean {
 				}
 
 				// Connect listeners
-				JoatseTunnel tunnel = registerTunnel(user, request);
+				JoatseTunnel tunnel = buildAndRegisterTunnel(user, request);
 				newTunnel = new TunnelCreationResult.Accepted(request, tunnel);
 			} finally {
 				lock.writeLock().unlock();
@@ -484,50 +461,23 @@ public class CloudTunnelService implements InitializingBean, DisposableBean {
 		}
 	}
 
-	private JoatseTunnel registerTunnel(JoatseUser owner, TunnelRequest request) {
+	private JoatseTunnel buildAndRegisterTunnel(JoatseUser owner, TunnelRequest request) {
 		JoatseTunnel tunnel;
 		if (!lock.writeLock().isHeldByCurrentThread()) {
 			throw new IllegalStateException();
-		}
-		/* First we select the ports, later we register it's use so we fail without registering some if we can't reserve all of them */
-		Set<Integer> portsNotAvailable = new HashSet<>(); // TODO init with already busy ports
-		Map<TunnelRequestTcpItem, Integer> tcpPortMap = new LinkedHashMap<>();
-		for (TunnelRequestItem i: new ArrayList<>(request.getItems())) {
-			if (i instanceof TunnelRequestTcpItem) {
-				int listenPort = chooseTcpListenPort(request, i, portsNotAvailable);
-				tcpPortMap.put((TunnelRequestTcpItem) i, listenPort);
-				portsNotAvailable.add(listenPort);
-			}
-		}
-		log.info("Selected tcp ports {} for session {}", tcpPortMap.values(), request.getUuid());
-		
+		}	
 		tunnel = new JoatseTunnel(owner, request, webListenerConfiguration.getPublicHostname());
-		for (TunnelRequestTcpItem r: tcpPortMap.keySet()) {
-			int port = tcpPortMap.get(r);
-			tunnel.addTcpItem(port, r);
+		List<TunnelRequestTcpItem> rItems = request.getItems().stream().filter(x -> x instanceof TunnelRequestTcpItem)
+				.map(x -> (TunnelRequestTcpItem) x).collect(Collectors.toList());
+		for (TunnelRequestTcpItem r: rItems) {
+			tunnel.addTcpItem(r);
 		}
 		List<TunnelRequestHttpItem> httpItems = request.getItems().stream()
 				.filter(i -> (i instanceof TunnelRequestHttpItem)).map(i->(TunnelRequestHttpItem)i).collect(Collectors.toList());
 
-		Map<String, Set<Integer>> httpPortsNotAvailable = new HashMap<>(); // TODO init with already busy ports
-		Collection<InetAddress> allowedAddress = tunnel.getAllowedAddress();
 		for (TunnelRequestHttpItem r : httpItems) {
-			InetSocketAddress httpHostPort = tunnelRegistry.findAvailableHttpPort(allowedAddress,
-					httpPortsNotAvailable);
-			if (httpHostPort != null) {
-				HttpProxy.HttpTunnel item = httpProxy.newHttpTunnel(tunnel, r, httpHostPort.getHostString(),
-						httpHostPort.getPort());
-				tunnel.addHttpItem(item);
-				httpPortsNotAvailable.computeIfAbsent(httpHostPort.getHostString(), k -> new HashSet<>())
-						.add(httpHostPort.getPort());
-			} else {
-				throw new RuntimeException("There is not an available port for http(s) tunnel");
-			}
+			tunnel.addHttpItem(httpProxy.newHttpTunnel(tunnel, r));
 		}
-		log.info(
-				"Selected http endpoints {} for session {}", tunnel.getHttpItems().stream()
-						.map(h -> h.getCloudHostname() + ":" + h.getListenPort()).collect(Collectors.toList()),
-				request.getUuid());
 		tunnelRegistry.registerTunnel(tunnel);
 		return tunnel;
 	}
@@ -541,25 +491,6 @@ public class CloudTunnelService implements InitializingBean, DisposableBean {
 			return tunnelRequestMap.get(uuid);
 		} finally {
 			lock.writeLock().unlock();
-		}
-	}
-
-	private int chooseTcpListenPort(TunnelRequest request, TunnelRequestItem i, Set<Integer> portsNotAvailable) {
-		// TODO maybe the request wants a specific port
-		lock.readLock().lock();
-		try {
-			ArrayList<Integer> options = new ArrayList<Integer>(openPortMap.keySet());
-			int size = options.size();
-			int r = new Random().nextInt(size);
-			for (int x = 0; x < size; x++) {
-				Integer port = options.get((x + r) % size);
-				if (!portsNotAvailable.contains(port)) {
-					return port;
-				}
-			}
-			throw new RuntimeException("There are not free tcp ports left to choose");
-		} finally {
-			lock.readLock().unlock();
 		}
 	}
 
@@ -578,88 +509,6 @@ public class CloudTunnelService implements InitializingBean, DisposableBean {
 
 	@Override
 	public void afterPropertiesSet() throws Exception {
-		lock.writeLock().lock();
-		try {
-			setupPortListen();
-		} finally {
-			lock.writeLock().unlock();
-		}
-	}
-
-	private void setupPortListen() throws UnknownHostException {
-		for (int p = openPortRange.min(); p <= openPortRange.max(); p++) {
-			setupPortListen(p);
-		}
-	}
-
-	private void setupPortListen(int port) throws UnknownHostException {
-		
-		AsyncTcpPortListener<Void> asyncTcpPortListener = new AsyncTcpPortListener<Void>(
-				InetAddress.getByName(listenHostname), port, null,
-				(Consumer<Event<Void>>) new Consumer<AsyncTcpPortListener.Event<Void>>() {
-					@Override
-					public void accept(Event<Void> t) {
-						if (t.error != null) {
-							log.error(String.format("Could not accept connections on tcp port %s: %s", port, t.error.toString()), t.error);
-							lock.writeLock().lock();
-							try {
-								openPortMap.remove(port);
-								/*
-								 * TODO Tell someone.
-								 * 
-								 * We have to detect who's this connection for. Remember there can be several
-								 * connections from different users on the same port.
-								 */
-							} finally {
-								lock.writeLock().unlock();
-							}
-						} else if (t.channel != null) {
-							try {
-								InetSocketAddress remoteAddress = (InetSocketAddress) IOTools
-										.runUnchecked(() -> t.channel.getRemoteAddress());
-								lock.readLock().lock();
-								try {
-									/*
-									 * We have to detect who's this connection for. Remember there can be several
-									 * connections from different users on the same port.
-									 */
-									List<JoatseTunnel.TcpTunnel> matching = tunnelRegistry
-											.findMatchingTcpTunnel(remoteAddress.getAddress(), port);
-									if (matching.size() == 1) {
-										TcpTunnel tcpTunnel = matching.get(0);
-										JoatseTunnel tunnel = tcpTunnel.getTunnel();
-										log.info("Accepted connection from {}.{} on port {}", remoteAddress,
-												tcpTunnel.targetId, port);
-										tunnel.tunnelTcpConnection(tcpTunnel.targetId, t.channel);
-									} else {
-										// Not accepted then rejected
-										log.warn("Rejected connection from {} at port {}", remoteAddress, port);
-										IOTools.closeChannel(t.channel);
-									}
-								} finally {
-									lock.readLock().unlock();
-								}
-							} catch (Exception e) {
-								log.warn("Error handling incomming socket: {}", e, e);
-								IOTools.closeChannel(t.channel);
-							}
-						} else {
-							log.info("Closed tcp port {}", port);
-							lock.writeLock().lock();
-							try {
-								openPortMap.remove(port);
-							} finally {
-								lock.writeLock().unlock();
-							}
-						}
-					}
-				});
-		lock.writeLock().lock();
-		try {
-			openPortMap.put(port, asyncTcpPortListener);
-		} finally {
-			lock.writeLock().unlock();
-		}
 	}
 
 	@Override
@@ -667,10 +516,6 @@ public class CloudTunnelService implements InitializingBean, DisposableBean {
 		lock.writeLock().lock();
 		try {
 			shuttingDown.set(true);
-			for (AsyncTcpPortListener<Void> port : this.openPortMap.values()) {
-				ForkJoinPool.commonPool().execute(()->port.close()); // Without lock
-			}
-			this.openPortMap.clear();
 		} finally {
 			lock.writeLock().unlock();
 		}

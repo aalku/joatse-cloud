@@ -47,6 +47,9 @@ public class JoatseWsHandler extends AbstractWebSocketHandler implements WebSock
 	@Autowired
 	private CloudTunnelService cloudTunnelService;
 	
+	@Autowired
+	private BandwithLimitManager bandwithLimitManager;
+	
 	/**
 	 * Map WebSocketSession.sessionId-->JWSSession
 	 */
@@ -71,7 +74,7 @@ public class JoatseWsHandler extends AbstractWebSocketHandler implements WebSock
 		HttpHeaders handshakeHeaders = wsSession.getHandshakeHeaders();
 		log.info("handshakeHeaders: {} - {}", wsSession.getId(), handshakeHeaders);
 		getStateReference(wsSession).set(State.WAITING_COMMAND);
-		wsSessionMap.put(wsSession.getId(), new JWSSession(wsSession));
+		wsSessionMap.put(wsSession.getId(), new JWSSession(wsSession, bandwithLimitManager));
 	}
 	
 	@Override
@@ -121,7 +124,8 @@ public class JoatseWsHandler extends AbstractWebSocketHandler implements WebSock
 					long targetId = jo.getLong("targetId");
 					String targetDescription = jo.optString("targetDescription");
 					URL targetUrl = new URL(jo.optString("targetUrl"));
-					httpTunnelReqs.add(new TunnelRequestHttpItem(targetId, targetDescription, targetUrl));
+					boolean unsafe = jo.optBoolean("unsafe", false);
+					httpTunnelReqs.add(new TunnelRequestHttpItem(targetId, targetDescription, targetUrl, unsafe));
 				}
 
 				
@@ -134,8 +138,21 @@ public class JoatseWsHandler extends AbstractWebSocketHandler implements WebSock
 				requestedTunnel.result.whenComplete((r,e)->{
 					if (e == null && r != null && r.isAccepted()) {
 						Accepted acceptedTunnel = (TunnelCreationResult.Accepted)r;
-						wsSession.getAttributes().put("uuid", acceptedTunnel.getUuid());
-						associateTunnel(wsSession, acceptedTunnel.getTunnel());
+						JoatseTunnel jTunnel = acceptedTunnel.getTunnel();
+						wsSession.getAttributes().put("uuid", jTunnel.getUuid());
+						JWSSession jWSSession = wsSessionMap.get(wsSession.getId());
+						if (associateTunnel(jWSSession, jTunnel)) {
+							try {
+								jWSSession.sendMessage((WebSocketMessage<?>) new TextMessage(runningTunnelMessage(jTunnel))).get();
+								getStateReference(wsSession).set(State.RUNNING); // Allow to process connections
+							} catch (Exception e1) {
+								log.error("Exception sending text response message: {}", e1, e1);
+								closeSession(wsSession, "Exception sending text response message", e1);
+							}
+						} else {
+							closeSession(wsSession, "Exception processing channel acceptance", null); // TODO
+						}
+
 					} else {
 						String rejectionCause;
 						if (e != null) {
@@ -181,8 +198,7 @@ public class JoatseWsHandler extends AbstractWebSocketHandler implements WebSock
 		}
 	}
 
-	private boolean associateTunnel(WebSocketSession wsSession, JoatseTunnel tunnel) {
-		JWSSession jWSSession = wsSessionMap.get(wsSession.getId());
+	private boolean associateTunnel(JWSSession jWSSession, JoatseTunnel tunnel) {
 		jWSSession.setTunnel(tunnel);
 		try {
 			/*
@@ -218,18 +234,9 @@ public class JoatseWsHandler extends AbstractWebSocketHandler implements WebSock
 			});
 		} catch (Exception e2) {
 			log.error("Exception processing channel acceptance: {}", e2, e2);
-			closeSession(wsSession, "Exception processing channel acceptance", e2);
 			return false;
 		}
 		log.info("JoatseTunnel was succesfully created!!");
-		try {
-			jWSSession.sendMessage((WebSocketMessage<?>) new TextMessage(runningTunnelMessage(tunnel))).get();
-			getStateReference(wsSession).set(State.RUNNING); // Allow to process connections
-		} catch (Exception e1) {
-			log.error("Exception sending text response message: {}", e1, e1);
-			closeSession(wsSession, "Exception sending text response message", e1);
-			return false;
-		}
 		return true;
 	}
 
@@ -242,7 +249,7 @@ public class JoatseWsHandler extends AbstractWebSocketHandler implements WebSock
 		for (TcpTunnel i: tunnel.getTcpItems()) {
 			JSONObject j = new JSONObject();
 			j.put("listenHost", cloudPublicHostname);
-			j.put("listenPort", i.listenPort);
+			j.put("listenPort", i.getListenAddressess());
 			j.put("targetHostname", i.targetHostname);
 			j.put("targetPort", i.targetPort);
 			tcpTunnels.add(j);
@@ -251,8 +258,7 @@ public class JoatseWsHandler extends AbstractWebSocketHandler implements WebSock
 		Collection<JSONObject> httpTunnels = new ArrayList<>();
 		for (HttpTunnel i: tunnel.getHttpItems()) {
 			JSONObject j = new JSONObject();
-			j.put("listenHost", i.getCloudHostname());
-			j.put("listenUrl", i.getListenUrl());
+			j.put("listenUrl", i.getListenAddressess());
 			j.put("targetUrl", i.getTargetURL());
 			httpTunnels.add(j);
 		}

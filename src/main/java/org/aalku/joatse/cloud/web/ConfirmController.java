@@ -59,13 +59,13 @@ public class ConfirmController {
 	 * @return
 	 */
 	@GetMapping(POST_LOGIN_CONFIRM_HASH)
-	public View postLogin(
+	public String postLogin(
 			@SessionAttribute(name = ConfirmController.CONFIRM_SESSION_KEY_HASH, required = true) HashContainer hash) {
 		userManager.requireRole("JOATSE_USER");
 		if (null != hash) {
-			return new RedirectView("/CF/A"); // With hash
+			return "forward:/CF/A"; // With hash
 		} else {
-			return new RedirectView("/"); // Normal login
+			return "redirect:/"; // Normal login
 		}
 	}
 
@@ -113,26 +113,24 @@ public class ConfirmController {
 		TunnelRequest tunnelRequest = cloudTunnelService
 				.getTunnelRequest(UUID.fromString(hashContainer.hash.replaceFirst("^#+", "")));
 		if (tunnelRequest != null) {
-			List<InetAddress> addresses = getRemoteAddressess(request);
-			tunnelRequest.setAllowedAddress(addresses);
+			InetAddress address = getRemoteAddresses(request);
+			tunnelRequest.setAllowedAddresses(Arrays.asList(address));
 			model.addAttribute("hash", hashContainer.hash);
 			model.addAttribute("tunnelRequest", tunnelRequest);
-			model.addAttribute("allowedAddress", formatAllowedAddress(addresses));
+			model.addAttribute("allowedAddress", formatAllowedAddress(tunnelRequest.getAllowedAddresses()));
 			model.addAttribute("uuid", tunnelRequest.getUuid().toString());
 		}
 		return "cf3.html";
 	}
 
 
-	private List<InetAddress> getRemoteAddressess(HttpServletRequest request) throws UnknownHostException {
-		String allowedAddress = request.getRemoteAddr();
-		List<InetAddress> addresses;
-		if (InetAddress.getByName(allowedAddress).isLoopbackAddress()) {
-			addresses = Arrays.asList(InetAddress.getAllByName("localhost"));
-		} else {
-			addresses = Arrays.asList(InetAddress.getAllByName(allowedAddress));
+	private InetAddress getRemoteAddresses(HttpServletRequest request) {
+		String remoteAddress = request.getRemoteAddr();
+		try {
+			return InetAddress.getByName(remoteAddress);
+		} catch (UnknownHostException e) {
+			throw new RuntimeException("Internal error", e);
 		}
-		return addresses;
 	}
 
 	@PostMapping("/CF/A")  

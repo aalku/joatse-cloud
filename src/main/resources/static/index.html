@@ -48,7 +48,7 @@
 								</b-row>
 							</b-container>
 							<b-container fluid>
-								<b-row v-for="(t, it) in s.tcpItems" :key="h.targetId">
+								<b-row v-for="(t, it) in s.tcpItems" :key="t.targetId">
 									<b-col sm="4">
 										<label :for="`tcp-s-${t.targetId}`">TCP Socket listening<span v-if="t.targetDescription"> -
 												{{t.targetDescription}}</span></label>

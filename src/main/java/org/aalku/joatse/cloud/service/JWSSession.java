@@ -12,6 +12,7 @@ import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.BiConsumer;
 
 import org.aalku.joatse.cloud.service.CloudTunnelService.JoatseTunnel;
+import org.aalku.joatse.cloud.tools.io.BandwithLimiter;
 import org.aalku.joatse.cloud.tools.io.IOTools;
 import org.aalku.joatse.cloud.tools.io.WebSocketSendWorker;
 import org.slf4j.Logger;
@@ -37,9 +38,15 @@ public class JWSSession {
 	private BiConsumer<String, Throwable> closer;
 
 	private JoatseTunnel tunnel;
+	
+	private BandwithLimiter bandwithLimiter;
 
-	public JWSSession(WebSocketSession session) {
-		wsSendWorker = new WebSocketSendWorker(session);
+	private BandwithLimitManager bandwithLimitManager;
+
+	public JWSSession(WebSocketSession session, BandwithLimitManager bandwithLimitManager) {
+		this.bandwithLimitManager = bandwithLimitManager;
+		this.wsSendWorker = new WebSocketSendWorker(session);
+		this.setBandwithLimiter(bandwithLimitManager.getGlobalBandwithLimiter());
 		this.closer = (BiConsumer<String, Throwable>)(closeReason, e)->{
 			// TODO Do something with e?
 			lock.lock();
@@ -74,6 +81,11 @@ public class JWSSession {
 		};
 	}
 
+	private void setBandwithLimiter(BandwithLimiter bandwithLimiter) {
+		this.bandwithLimiter = bandwithLimiter;
+		this.wsSendWorker.setBandwithLimiter(bandwithLimiter);
+	}
+
 	void addTunnelConnection(TunnelTcpConnection c) {
 		lock.lock();
 		try {
@@ -102,36 +114,40 @@ public class JWSSession {
 	}
 
 	public void handleBinaryMessage(BinaryMessage message) throws IOException {
-		ByteBuffer buffer = message.getPayload();
-		int version = buffer.get();
-		if (version != TunnelTcpConnection.PROTOCOL_VERSION) {
-			throw new IOException("Unsupported BinaryMessage protocol version: " + version);
-		}
-		byte type = buffer.get();
-		if (TunnelTcpConnection.messageTypesHandled.contains(type)) {
-			long socketId = buffer.getLong();
-			Runnable runWithoutLock = null; 
-			TunnelTcpConnection c = null;
-			lock.lock();
-			try {
-				c = tcpConnectionMap.get(socketId);
-				if (c == null) {
-					log.warn("Received ws data relating a tcp connection that was disconnected: {}", socketId);
-				}
-				runWithoutLock = c.receivedMessage(buffer, type); // blocking with lock is ok
-			} catch (Exception e) {
-				if (c != null) {
-					log.warn("Error handling tcp data: " + e, e);
-					c.close();
-				}
-			} finally {
-				lock.unlock();
+		try {
+			ByteBuffer buffer = message.getPayload();
+			int version = buffer.get();
+			if (version != TunnelTcpConnection.PROTOCOL_VERSION) {
+				throw new IOException("Unsupported BinaryMessage protocol version: " + version);
 			}
-			if (runWithoutLock != null) {
-				runWithoutLock.run();
+			byte type = buffer.get();
+			if (TunnelTcpConnection.messageTypesHandled.contains(type)) {
+				long socketId = buffer.getLong();
+				Runnable runWithoutLock = null; 
+				TunnelTcpConnection c = null;
+				lock.lock();
+				try {
+					c = tcpConnectionMap.get(socketId);
+					if (c == null) {
+						log.warn("Received ws data relating a tcp connection that was disconnected: {}", socketId);
+					}
+					runWithoutLock = c.receivedMessage(buffer, type); // blocking with lock is ok
+				} catch (Exception e) {
+					if (c != null) {
+						log.warn("Error handling tcp data: " + e, e);
+						c.close();
+					}
+				} finally {
+					lock.unlock();
+				}
+				if (runWithoutLock != null) {
+					runWithoutLock.run();
+				}
+			} else {
+				throw new IOException("Unsupported BinaryMessage message type: " + type);
 			}
-		} else {
-			throw new IOException("Unsupported BinaryMessage message type: " + type);
+		} finally {
+			bandwithLimiter.next(message.getPayloadLength()).sleep();
 		}
 	}
 
@@ -140,15 +156,31 @@ public class JWSSession {
 	}
 
 	public JoatseTunnel getTunnel() {
-		return tunnel;
+		lock.lock();
+		try {
+			return tunnel;
+		} finally {
+			lock.unlock();
+		}
 	}
 
 	public void setTunnel(JoatseTunnel tunnel) {
-		this.tunnel = tunnel;
+		lock.lock();
+		try {
+			this.tunnel = tunnel;
+			this.setBandwithLimiter(bandwithLimitManager.getUserBandwithLimiter(tunnel.getOwner().getUuid()));
+		} finally {
+			lock.unlock();
+		}
 	}
 
 	public UUID getTunnelUUID() {
-		return Optional.ofNullable(tunnel).map(t->t.getUuid()).orElse(null);
+		lock.lock();
+		try {
+			return Optional.ofNullable(tunnel).map(t->t.getUuid()).orElse(null);
+		} finally {
+			lock.unlock();
+		}
 	}
 
 }

@@ -12,7 +12,7 @@ const App = {
 	},
     methods: {
 		openHttpTunnel(s, h) {
-			window.open("http://" + h.listenHostname + ':' + h.listenPort + "/", "_blank");
+			window.open(h.listenUrl, "_blank");
 			return false;
 		}
     },
@@ -24,11 +24,11 @@ const App = {
 							s.requesterHostname = s.requesterAddress.split(':')[0];
 							s.creationTime = new Date(Date.parse(s.creationTime)).toUTCString();
 							s.tcpItems = s.tcpItems.map(tcp=>{
-								tcp.description = tcp.listenHostname + ':' + tcp.listenPort + ' --> [' + s.requesterHostname + '] --> ' + tcp.targetHostname + ':' + tcp.targetPort;
+								tcp.description = tcp.listenUrl + ' --> [' + s.requesterHostname + '] --> ' + tcp.targetHostname + ':' + tcp.targetPort;
 								return tcp;
 							});
 							s.httpItems = s.httpItems.map(http=>{
-								http.description = http.listenHostname + ':' + http.listenPort + ' --> [' + s.requesterHostname + '] --> ' + http.targetUrl;
+								http.description = http.listenUrl + ' --> [' + s.requesterHostname + '] --> ' + http.targetUrl;
 								return http;
 							});
 							return s;

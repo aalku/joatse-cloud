@@ -27,7 +27,6 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseBody;
-import org.springframework.web.server.ResponseStatusException;
 
 @Controller
 public class JoatseLoginController implements InitializingBean {
@@ -64,7 +63,7 @@ public class JoatseLoginController implements InitializingBean {
 	public String postLogin(jakarta.servlet.http.HttpSession session) {
 		if (session.getAttribute(ConfirmController.CONFIRM_SESSION_KEY_HASH) != null) {
 			/* We are confirming a request */
-			return "redirect:/" + ConfirmController.POST_LOGIN_CONFIRM_HASH;
+			return "forward:" + ConfirmController.POST_LOGIN_CONFIRM_HASH;
 		} else {
 			Optional<JoatseUser> user = userManager.getAuthenticatedUser();
 			log.warn("postLogin - User: {}", user);
@@ -221,20 +220,6 @@ public class JoatseLoginController implements InitializingBean {
 	private void setupEmailVerification() {
 		if (emailVerificationEnabled && !asyncEmailSender.isEnabled()) {
 			throw new IllegalStateException("In order to enable email verification the email sending must be configured");
-		}
-	}
-
-	@GetMapping("/user")
-	@ResponseBody
-	public Map<String, Object> getUser() {
-		JoatseUser user = userManager.getAuthenticatedUser().orElse(null);
-		if (user != null) {
-			return Map.of(
-					"nameToAddress", user.getUsername(),
-					"isAdmin", user.isAdmin()
-				);
-		} else {
-			throw new ResponseStatusException(org.springframework.http.HttpStatus.NOT_FOUND, "User not logged in");
 		}
 	}
 }

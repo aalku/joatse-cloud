@@ -27,6 +27,9 @@ public class ListenPortConfigurator implements InitializingBean {
 	@Value("${cloud.http.port.range:}")
 	private String httpOpenPortRangeString;
 	
+	@Value("${cloud.http.unsafe.port.range:}")
+	private String unsafeHttpOpenPortRangeString;
+	
 	@Value("${cloud.http.tunnel.hosts:}")
 	private Set<String> httpHosts;
 
@@ -52,6 +55,20 @@ public class ListenPortConfigurator implements InitializingBean {
 		httpPortRange.setup(httpOpenPortRangeString, "cloud.http.port.range",
 				Collections.singletonMap(webListenerConfiguration.getServerPort(), "server.port"), forbidenRanges);
 		return httpPortRange;
+	}
+	
+	@Bean("httpUnsafePortRange")
+	public PortRange httpUnsafePortRange(@Autowired @Qualifier("openPortRange") PortRange openPortRange,
+			@Autowired @Qualifier("httpPortRange") PortRange httpPortRange) throws Exception {
+
+		Map<PortRange, String> forbidenRanges = new LinkedHashMap<>();
+		forbidenRanges.put(openPortRange, "cloud.port.open.range");
+		forbidenRanges.put(httpPortRange, "cloud.http.port.range");
+
+		PortRange httpUnsafePortRange = new PortRange();
+		httpUnsafePortRange.setup(unsafeHttpOpenPortRangeString, "cloud.http.unsafe.port.range",
+				Collections.singletonMap(webListenerConfiguration.getServerPort(), "server.port"), forbidenRanges);
+		return httpUnsafePortRange;
 	}
 	
 	@Bean("switchboardPortListener")

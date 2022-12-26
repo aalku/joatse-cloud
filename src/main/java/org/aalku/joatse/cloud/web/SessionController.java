@@ -3,7 +3,6 @@ package org.aalku.joatse.cloud.web;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -35,19 +34,12 @@ public class SessionController {
 	@Autowired
 	private UserManager userManager;
 	
-	private List<InetAddress> getRemoteAddressess(HttpServletRequest request) {
-		String allowedAddress = request.getRemoteAddr();
-		List<InetAddress> addresses;
+	private InetAddress getRemoteAddress(HttpServletRequest request) {
 		try {
-			if (InetAddress.getByName(allowedAddress).isLoopbackAddress()) {
-				addresses = Arrays.asList(InetAddress.getAllByName("localhost"));
-			} else {
-				addresses = Arrays.asList(InetAddress.getAllByName(allowedAddress));
-			}
+			return InetAddress.getByName(request.getRemoteAddr());
 		} catch (UnknownHostException e) {
 			throw new RuntimeException("Internal error", e);
 		}
-		return addresses;
 	}
 
 	@GetMapping("/sessions")
@@ -59,9 +51,10 @@ public class SessionController {
 			m.put("uuid", s.getTunnelUUID());
 			JoatseTunnel t = s.getTunnel();
 			m.put("requesterAddress", t.getRequesterAddress());
-			m.put("allowedAddress", t.getAllowedAddress());
+			m.put("allowedAddress", t.getAllowedAddresses());
 			m.put("creationTime", t.getCreationTime());			
-			boolean allowed = getRemoteAddressess(request).stream().anyMatch(a->t.getAllowedAddress().contains(a));
+			InetAddress remoteAddress = getRemoteAddress(request);
+			boolean allowed = t.getAllowedAddresses().contains(remoteAddress);
 			m.put("addressIsAllowed", allowed);
 			
 			Collection<TcpTunnel> tcpItems = t.getTcpItems();
@@ -74,7 +67,7 @@ public class SessionController {
 					item.put("targetHostname", x.targetHostname);
 					item.put("targetPort", x.targetPort);
 					item.put("listenHostname", webListenerConfiguration.getPublicHostname());
-					item.put("listenPort", x.listenPort);
+					item.put("listenPort", x.getListenAddressess().get(remoteAddress));
 					atcp.add(item);
 				}
 			}
@@ -88,8 +81,7 @@ public class SessionController {
 					item.put("targetId", x.getTargetId());
 					item.put("targetDescription", x.getTargetDescription());
 					item.put("targetUrl", x.getTargetURL().toString());
-					item.put("listenHostname", x.getCloudHostname());
-					item.put("listenPort", x.getListenPort());
+					item.put("listenUrl", x.getListenAddressess().get(remoteAddress));
 					ahttp.add(item);
 				}
 			}
