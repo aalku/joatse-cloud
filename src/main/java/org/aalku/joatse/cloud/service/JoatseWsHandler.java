@@ -127,6 +127,12 @@ public class JoatseWsHandler extends AbstractWebSocketHandler implements WebSock
 					boolean unsafe = jo.optBoolean("unsafe", false);
 					httpTunnelReqs.add(new TunnelRequestHttpItem(targetId, targetDescription, targetUrl, unsafe));
 				}
+				
+				Optional.ofNullable(js.optJSONArray("socks5Tunnel")).ifPresent(a->{
+					JSONObject jo = a.getJSONObject(0);
+					long targetId = jo.getLong("targetId");
+					tcpTunnelReqs.add(new TunnelRequestTcpItem(targetId, "socks5", "socks5", 0));
+				});
 
 				
 				TunnelCreationResponse requestedTunnel = cloudTunnelService.requestTunnel(wsSession.getPrincipal(),

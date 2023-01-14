@@ -38,7 +38,11 @@ public class WebSocketSendWorker extends Thread {
 
 	public CompletableFuture<Void> sendMessage(WebSocketMessage<?> message) {
 		Item item = new Item(message);
-		queue.add(item);
+		try {
+			queue.put(item);
+		} catch (InterruptedException e) {
+			throw new RuntimeException(e);
+		}
 		return item.future;
 	}
 	

@@ -24,11 +24,11 @@ const App = {
 							s.requesterHostname = s.requesterAddress.split(':')[0];
 							s.creationTime = new Date(Date.parse(s.creationTime)).toUTCString();
 							s.tcpItems = s.tcpItems.map(tcp=>{
-								tcp.description = tcp.listenUrl + ' --> [' + s.requesterHostname + '] --> ' + tcp.targetHostname + ':' + tcp.targetPort;
+								tcp.description = `${tcp.listenHostname}:${tcp.listenPort} --> tunnel --> ${tcp.targetHostname}${tcp.targetPort > 0 ? `:${tcp.targetPort}` : ""}`;
 								return tcp;
 							});
 							s.httpItems = s.httpItems.map(http=>{
-								http.description = http.listenUrl + ' --> [' + s.requesterHostname + '] --> ' + http.targetUrl;
+								http.description = `${http.listenUrl} --> tunnel --> ${http.targetUrl}`;
 								return http;
 							});
 							return s;

@@ -23,11 +23,11 @@ public class TunnelTcpConnection {
 
 	static final byte PROTOCOL_VERSION = 1;
 	
-	private static final byte MESSAGE_TYPE_NEW_TCP_SOCKET = 1;
-	private static final byte MESSAGE_TCP_DATA = 2;
-	static final byte MESSAGE_TCP_CLOSE = 3;
+	private static final byte MESSAGE_TYPE_NEW_SOCKET = 1;
+	private static final byte MESSAGE_SOCKET_DATA = 2;
+	static final byte MESSAGE_SOCKET_CLOSE = 3;
 	
-	public static final Set<Byte> messageTypesHandled = new HashSet<>(Arrays.asList(MESSAGE_TYPE_NEW_TCP_SOCKET, MESSAGE_TCP_DATA, MESSAGE_TCP_CLOSE));
+	public static final Set<Byte> messageTypesHandled = new HashSet<>(Arrays.asList(MESSAGE_TYPE_NEW_SOCKET, MESSAGE_SOCKET_DATA, MESSAGE_SOCKET_CLOSE));
 	
 	private static final int MAX_HEADER_SIZE_BYTES = 50;
 	private static final int DATA_BUFFER_SIZE = 1024 * 63;
@@ -140,7 +140,7 @@ public class TunnelTcpConnection {
 	}
 
 	private CompletableFuture<Void> sendNewSocketMessage(ByteBuffer buffer, long targetId) {
-		writeSocketHeader(buffer, MESSAGE_TYPE_NEW_TCP_SOCKET);
+		writeSocketHeader(buffer, MESSAGE_TYPE_NEW_SOCKET);
 		buffer.putLong(targetId);
 		buffer.flip();
 		return sendMessage(new BinaryMessage(buffer, true));
@@ -166,7 +166,7 @@ public class TunnelTcpConnection {
 			}
 			// Write header at 0
 			buffer.position(0);
-			writeSocketHeader(buffer, MESSAGE_TCP_DATA);
+			writeSocketHeader(buffer, MESSAGE_SOCKET_DATA);
 			// Update CRC calc skipping the header
 			dataCRCT2W.update(buffer.array(), buffer.arrayOffset() + headerLen, pos - headerLen);
 			buffer.putInt((int) dataCRCT2W.getValue());
@@ -239,7 +239,7 @@ public class TunnelTcpConnection {
 		ByteBuffer buffer = ByteBuffer.allocate(11);
 		buffer.clear();
 		buffer.put(PROTOCOL_VERSION);
-		buffer.put(MESSAGE_TCP_CLOSE);
+		buffer.put(MESSAGE_SOCKET_CLOSE);
 		buffer.putLong(socketId);
 		buffer.flip();
 		return new BinaryMessage(buffer);
@@ -257,7 +257,7 @@ public class TunnelTcpConnection {
 	}
 
 	public Runnable receivedMessage(ByteBuffer buffer, byte type) {
-		if (type == MESSAGE_TCP_DATA) {
+		if (type == MESSAGE_SOCKET_DATA) {
 			try {
 				long crc32Field = buffer.getInt() & 0xFFFFFFFFL;
 				receivedWsTcpMessage(buffer, crc32Field);
@@ -266,10 +266,10 @@ public class TunnelTcpConnection {
 				log.warn("Error sending data to TCP: " + e, e);
 				return ()->close(); // Call it without lock
 			}
-		} else if (type == MESSAGE_TYPE_NEW_TCP_SOCKET) {
+		} else if (type == MESSAGE_TYPE_NEW_SOCKET) {
 			int res = buffer.get();
 			return ()->notifyFinalTargetConnected(res == 1); // Notify without the lock
-		} else if (type == TunnelTcpConnection.MESSAGE_TCP_CLOSE) {
+		} else if (type == TunnelTcpConnection.MESSAGE_SOCKET_CLOSE) {
 			return ()->receivedWsTcpClose(); // Can be executed with lock I guess
 		} else {
 			throw new RuntimeException("Unsupported message type: " + type);
