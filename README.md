@@ -10,6 +10,8 @@ It's designed for sysadmins and software developers to access resources they alr
 
 Right now you can share access to any TCP port that is accessible to you and any http(s) resource but in the future we would like to be able to share UDP ports, files, folders and maybe other resources.
 
+You can also share any TCP port or http(s) resource via unauthenticated Socks5 proxy protocol.
+
 ## How to use it
 
 The first thing you need to know is that Joatse is a software solution and not a service, so don't expect a simple guide to start using it in 5 minutes.
@@ -30,6 +32,8 @@ Joatse uses it's own "cloud" server software as web server, tunnel broker and sh
 
 Once the user confirms the tunnel creation the server will open a TCP port and tunnel any authorized incoming connection through the very same web socket to the client software and it will connect it to a new TCP connection to the target.
 
+It works the same way for http(s) and socks5 as they are internally handled mostly the same but with a jetty transparent proxy on the server side for http(s) and with a socks5 proxy on the Joatse client side for socks5.
+
 ## Project state
 
 It just started working so it isn't beautiful, it might crash and the functionality is limited, but it really works.
@@ -38,9 +42,11 @@ You can find the client software [here](https://github.com/aalku/joatse-target).
 
 Http(s) is shared with a reverse proxy that might not work for modern web apps but it can share many simple pages, web apps designed to work behind a proxy and any APIs. This needs some work to be compatible with more places and tools. I might add a javascript library to be added to web pages from the proxy so the page itself captures AJAX requests and makes them run through the proxy.
 
+Socks5 is implemented and seems to be working. Target client chooses what to share or * to share anything. Socks5 client can ask for anything but only resources approved to be shared will be available.
+
 There's a lot of work ahead. We need to create use guides a better web interface and a lot of improvements.
 
-The server has a prototype of user system but it currently generates a random admin password that's not even stored anywhere so it's random again on every restart and you have to search for it in the server logs. But if you register your server in Google APIs then you can log in with your Google account too.
+The server has a working user system and you can use Google APIs to log in with your Google account too.
 
 We want to have a developed local user system and support other providers of delegated authentication like Facebook or GitHub.
 
