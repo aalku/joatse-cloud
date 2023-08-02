@@ -23,6 +23,10 @@ public class PortRange {
 	public int max() {
 		return max;
 	}
+	
+	public int count() {
+		return max - min + 1;
+	}
 
 	public void setup(String rangeString, String rangeProperty, Map<Integer, String> forbiddenPorts, Map<PortRange, String> forbidenRanges) throws Exception {
 		if (rangeString == null || rangeString.isBlank()) {

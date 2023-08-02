@@ -3,15 +3,14 @@ package org.aalku.joatse.cloud.service;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.UnknownHostException;
+import java.nio.channels.AsynchronousSocketChannel;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ForkJoinPool;
 import java.util.function.Consumer;
 
-import org.aalku.joatse.cloud.service.CloudTunnelService.JoatseTunnel;
-import org.aalku.joatse.cloud.service.CloudTunnelService.JoatseTunnel.TcpTunnel;
+import org.aalku.joatse.cloud.service.sharing.SharingManager;
 import org.aalku.joatse.cloud.tools.io.AsyncTcpPortListener;
 import org.aalku.joatse.cloud.tools.io.AsyncTcpPortListener.Event;
 import org.aalku.joatse.cloud.tools.io.IOTools;
@@ -44,13 +43,13 @@ public class TcpTunnelPortListenManager implements InitializingBean, DisposableB
 	private String listenHostname;
 
 	@Autowired
-	private TunnelRegistry tunnelRegistry;
+	private SharingManager sharingManager;
 
 	private void setupPortListen() throws UnknownHostException {
 		for (int p = openPortRange.min(); p <= openPortRange.max(); p++) {
 			setupPortListen(p);
 		}
-		tunnelRegistry.setTcpOpenPorts(new ArrayList<>(openPortMap.keySet()));
+		sharingManager.setTcpOpenPorts(new ArrayList<>(openPortMap.keySet()));
 	}
 
 	private void setupPortListen(int port) throws UnknownHostException {
@@ -71,38 +70,26 @@ public class TcpTunnelPortListenManager implements InitializingBean, DisposableB
 								 * connections from different users on the same port.
 								 */
 							}
-						} else if (t.channel != null) {
-							try {
-								InetSocketAddress remoteAddress = (InetSocketAddress) IOTools
-										.runUnchecked(() -> t.channel.getRemoteAddress());
-								/*
-								 * We have to detect who's this connection for. Remember there can be several
-								 * connections from different users on the same port.
-								 */
-								List<JoatseTunnel.TcpTunnel> matching = tunnelRegistry
-										.findMatchingTcpTunnel(remoteAddress.getAddress(), port);
-								if (matching.size() == 1) {
-									TcpTunnel tcpTunnel = matching.get(0);
-									JoatseTunnel tunnel = tcpTunnel.getTunnel();
-									log.info("Accepted connection from {}.{} on port {}", remoteAddress,
-											tcpTunnel.targetId, port);
-									tunnel.tunnelTcpConnection(tcpTunnel.targetId, t.channel);
-								} else {
-									// Not accepted then rejected
-									log.warn("Rejected connection from {} at port {}", remoteAddress, port);
-									IOTools.closeChannel(t.channel);
-								}
-							} catch (Exception e) {
-								log.warn("Error handling incomming socket: {}", e, e);
-								IOTools.closeChannel(t.channel);
-							}
 						} else {
-							log.info("Closed tcp port {}", port);
-							synchronized (openPortMap) {
-								openPortMap.remove(port);
+							AsynchronousSocketChannel channel = t.channel;
+							if (channel != null) {
+								try {
+									InetSocketAddress remoteAddress = (InetSocketAddress) IOTools
+											.runUnchecked(() -> channel.getRemoteAddress());
+									sharingManager.receivedTcpConnection(port, channel, remoteAddress);
+								} catch (Exception e) {
+									log.warn("Error handling incomming socket: {}", e, e);
+									IOTools.closeChannel(channel);
+								}
+							} else {
+								log.info("Closed tcp port {}", port);
+								synchronized (openPortMap) {
+									openPortMap.remove(port);
+								}
 							}
 						}
 					}
+
 				});
 		synchronized (openPortMap) {
 			openPortMap.put(port, asyncTcpPortListener);

@@ -25,7 +25,7 @@
             <fileNamePattern>joatse.%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
             <maxFileSize>10MB</maxFileSize>
             <totalSizeCap>500MB</totalSizeCap>
-            <maxHistory>10</maxHistory>
+            <maxHistory>1</maxHistory>
         </rollingPolicy>
         <encoder>
             <pattern>%d %p %c{1} [%t] %m%n</pattern>

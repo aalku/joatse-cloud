@@ -6,14 +6,14 @@ import java.net.UnknownHostException;
 import java.time.Instant;
 import java.util.Arrays;
 import java.util.Collection;
-import java.util.List;
+import java.util.LinkedHashSet;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.Stream;
 
 import org.aalku.joatse.cloud.config.WebSecurityConfiguration;
-import org.aalku.joatse.cloud.service.CloudTunnelService;
-import org.aalku.joatse.cloud.service.CloudTunnelService.TunnelRequest;
+import org.aalku.joatse.cloud.service.sharing.SharingManager;
+import org.aalku.joatse.cloud.service.sharing.request.LotSharingRequest;
 import org.aalku.joatse.cloud.service.user.UserManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -39,7 +39,7 @@ public class ConfirmController {
 	private Logger log = LoggerFactory.getLogger(ConfirmController.class);
 	
 	@Autowired
-	private CloudTunnelService cloudTunnelService;
+	private SharingManager sharingManager;
 	
 	@Autowired
 	private UserManager userManager;
@@ -110,15 +110,15 @@ public class ConfirmController {
 		if (hashContainer.receivedInstant.plusSeconds(300).isBefore(Instant.now())) {
 			throw new RuntimeException("Expired hash"); // TODO show it nicely
 		}
-		TunnelRequest tunnelRequest = cloudTunnelService
+		LotSharingRequest lotSharingRequest = sharingManager
 				.getTunnelRequest(UUID.fromString(hashContainer.hash.replaceFirst("^#+", "")));
-		if (tunnelRequest != null) {
+		if (lotSharingRequest != null) {
 			InetAddress address = getRemoteAddresses(request);
-			tunnelRequest.setAllowedAddresses(Arrays.asList(address));
+			lotSharingRequest.setAllowedAddresses(new LinkedHashSet<>(Arrays.asList(address)));
 			model.addAttribute("hash", hashContainer.hash);
-			model.addAttribute("tunnelRequest", tunnelRequest);
-			model.addAttribute("allowedAddress", formatAllowedAddress(tunnelRequest.getAllowedAddresses()));
-			model.addAttribute("uuid", tunnelRequest.getUuid().toString());
+			model.addAttribute("tunnelRequest", lotSharingRequest);
+			model.addAttribute("allowedAddress", formatAllowedAddress(lotSharingRequest.getAllowedAddresses()));
+			model.addAttribute("uuid", lotSharingRequest.getUuid().toString());
 		}
 		return "cf3.html";
 	}
@@ -138,7 +138,7 @@ public class ConfirmController {
 		userManager.requireRole("JOATSE_USER");
 		//log.info("confirm4");
 		UUID uuid = UUID.fromString(sUuid);
-		cloudTunnelService.acceptTunnelRequest(uuid, userManager.getAuthenticatedUser().orElseThrow());
+		sharingManager.acceptTunnelRequest(uuid, userManager.getAuthenticatedUser().orElseThrow());
 		return "redirect:/";
 	}
 	

@@ -91,7 +91,7 @@ public class BandwithLimiter {
 	
 	private final int windowsStored = (int) (TimeUnit.SECONDS.toNanos(30) / windowTimeNanos);
 	
-	private LinkedBlockingDeque<MeasureWindow> windows = new LinkedBlockingDeque<>(windowsStored);
+	private LinkedBlockingDeque<MeasureWindow> windows = new LinkedBlockingDeque<>();
 
 	private long maxPauseNanos;
 

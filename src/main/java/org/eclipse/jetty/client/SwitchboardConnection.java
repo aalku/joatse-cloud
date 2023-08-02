@@ -9,7 +9,7 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 
-import org.aalku.joatse.cloud.service.HttpProxy;
+import org.aalku.joatse.cloud.service.sharing.http.HttpTunnel;
 import org.eclipse.jetty.io.AbstractConnection;
 import org.eclipse.jetty.io.ClientConnectionFactory;
 import org.eclipse.jetty.io.ClientConnector;
@@ -56,7 +56,7 @@ public class SwitchboardConnection extends AbstractConnection {
 
 	@Override
 	public void onOpen() {							
-		HttpProxy.HttpTunnel tunnel = (HttpProxy.HttpTunnel) destination.getOrigin().getTag();
+		HttpTunnel tunnel = (HttpTunnel) destination.getOrigin().getTag();
 		UUID uuid = tunnel.getTunnel().getUuid();
 		log.info("onOpen. HttpTunnel= {} --> {}", uuid, tunnel.getTargetURL().toString());
 		super.onOpen();

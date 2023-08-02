@@ -8,21 +8,24 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.BiConsumer;
 
-import org.aalku.joatse.cloud.service.CloudTunnelService.JoatseTunnel;
+import org.aalku.joatse.cloud.service.sharing.shared.SharedResourceLot;
 import org.aalku.joatse.cloud.tools.io.BandwithLimiter;
 import org.aalku.joatse.cloud.tools.io.IOTools;
 import org.aalku.joatse.cloud.tools.io.WebSocketSendWorker;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.web.socket.BinaryMessage;
+import org.springframework.web.socket.PingMessage;
 import org.springframework.web.socket.WebSocketMessage;
 import org.springframework.web.socket.WebSocketSession;
 
 public class JWSSession {
-
+	
 	private Logger log = LoggerFactory.getLogger(JWSSession.class);
 
 	private ReentrantLock lock = new ReentrantLock();
@@ -37,11 +40,49 @@ public class JWSSession {
 	 */
 	private BiConsumer<String, Throwable> closer;
 
-	private JoatseTunnel tunnel;
+	private SharedResourceLot sharedResourceLot;
 	
 	private BandwithLimiter bandwithLimiter;
 
 	private BandwithLimitManager bandwithLimitManager;
+	
+	private final SessionPingHandler sessionPingHandler = new SessionPingHandler();
+	
+	/** Ping stats and sending, but it's scheduled from the outside */
+	public class SessionPingHandler {
+		private AtomicLong lastPingNanoTime = new AtomicLong(0);
+		private AtomicLong lastPongNanoTime = new AtomicLong(0);
+		
+		public long getLastPingAgoSeconds() {
+			long last = lastPingNanoTime.get();
+			if (last == 0) {
+				return Integer.MAX_VALUE;
+			} else {
+				return TimeUnit.NANOSECONDS.toSeconds(System.nanoTime() - last);
+			}
+		}
+
+		public long getLastPongAgoSeconds() {
+			long last = lastPongNanoTime.get();
+			if (last == 0) {
+				return Integer.MAX_VALUE;
+			} else {
+				return TimeUnit.NANOSECONDS.toSeconds(System.nanoTime() - last);
+			}
+		}
+
+		public void sendPing() {
+//			log.info("Sending ping to " + getTunnelUUID());
+			wsSendWorker.sendMessage(new PingMessage());
+			lastPingNanoTime.set(System.nanoTime());
+		}
+
+		public void receivedPong() {
+//			log.info("Received pong from " + getTunnelUUID());
+			lastPongNanoTime.set(System.nanoTime());
+		}
+	}
+	
 
 	public JWSSession(WebSocketSession session, BandwithLimitManager bandwithLimitManager) {
 		this.bandwithLimitManager = bandwithLimitManager;
@@ -155,20 +196,20 @@ public class JWSSession {
 		return wsSendWorker.sendMessage(message);
 	}
 
-	public JoatseTunnel getTunnel() {
+	public SharedResourceLot getSharedResourceLot() {
 		lock.lock();
 		try {
-			return tunnel;
+			return sharedResourceLot;
 		} finally {
 			lock.unlock();
 		}
 	}
 
-	public void setTunnel(JoatseTunnel tunnel) {
+	public void setSharedResourceLot(SharedResourceLot sharedResourceLot) {
 		lock.lock();
 		try {
-			this.tunnel = tunnel;
-			this.setBandwithLimiter(bandwithLimitManager.getUserBandwithLimiter(tunnel.getOwner().getUuid()));
+			this.sharedResourceLot = sharedResourceLot;
+			this.setBandwithLimiter(bandwithLimitManager.getUserBandwithLimiter(sharedResourceLot.getOwner().getUuid()));
 		} finally {
 			lock.unlock();
 		}
@@ -177,10 +218,14 @@ public class JWSSession {
 	public UUID getTunnelUUID() {
 		lock.lock();
 		try {
-			return Optional.ofNullable(tunnel).map(t->t.getUuid()).orElse(null);
+			return Optional.ofNullable(sharedResourceLot).map(t->t.getUuid()).orElse(null);
 		} finally {
 			lock.unlock();
 		}
+	}
+
+	public SessionPingHandler getSessionPingHandler() {
+		return sessionPingHandler;
 	}
 
 }

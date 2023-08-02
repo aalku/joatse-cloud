@@ -1,7 +1,6 @@
 package org.aalku.joatse.cloud.service;
 
 import java.io.IOException;
-import java.net.URL;
 import java.nio.channels.AsynchronousSocketChannel;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -12,25 +11,28 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
 import java.util.stream.Collectors;
 
-import org.aalku.joatse.cloud.service.CloudTunnelService.JoatseTunnel;
-import org.aalku.joatse.cloud.service.CloudTunnelService.JoatseTunnel.TcpTunnel;
-import org.aalku.joatse.cloud.service.CloudTunnelService.TunnelCreationResponse;
-import org.aalku.joatse.cloud.service.CloudTunnelService.TunnelCreationResult;
-import org.aalku.joatse.cloud.service.CloudTunnelService.TunnelCreationResult.Accepted;
-import org.aalku.joatse.cloud.service.CloudTunnelService.TunnelRequestHttpItem;
-import org.aalku.joatse.cloud.service.CloudTunnelService.TunnelRequestTcpItem;
-import org.aalku.joatse.cloud.service.HttpProxy.HttpTunnel;
+import org.aalku.joatse.cloud.service.JWSSession.SessionPingHandler;
+import org.aalku.joatse.cloud.service.sharing.SharingManager;
+import org.aalku.joatse.cloud.service.sharing.SharingManager.TunnelCreationResponse;
+import org.aalku.joatse.cloud.service.sharing.SharingManager.TunnelCreationResult;
+import org.aalku.joatse.cloud.service.sharing.SharingManager.TunnelCreationResult.Accepted;
+import org.aalku.joatse.cloud.service.sharing.http.HttpTunnel;
+import org.aalku.joatse.cloud.service.sharing.request.LotSharingRequest;
+import org.aalku.joatse.cloud.service.sharing.shared.SharedResourceLot;
+import org.aalku.joatse.cloud.service.sharing.shared.TcpTunnel;
 import org.aalku.joatse.cloud.service.user.vo.JoatseUser;
 import org.aalku.joatse.cloud.tools.io.IOTools;
-import org.json.JSONArray;
 import org.json.JSONObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.DisposableBean;
+import org.springframework.beans.factory.InitializingBean;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpHeaders;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.BinaryMessage;
 import org.springframework.web.socket.CloseStatus;
+import org.springframework.web.socket.PongMessage;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketHandler;
 import org.springframework.web.socket.WebSocketMessage;
@@ -38,14 +40,14 @@ import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.AbstractWebSocketHandler;
 
 @Component
-public class JoatseWsHandler extends AbstractWebSocketHandler implements WebSocketHandler {
+public class JoatseWsHandler extends AbstractWebSocketHandler implements WebSocketHandler, InitializingBean, DisposableBean {
 	
 	private static final int MESSAGE_SIZE_LIMIT = 1024*64;
 
 	private Logger log = LoggerFactory.getLogger(JoatseWsHandler.class);
 	
 	@Autowired
-	private CloudTunnelService cloudTunnelService;
+	private SharingManager sharingManager;
 	
 	@Autowired
 	private BandwithLimitManager bandwithLimitManager;
@@ -54,8 +56,13 @@ public class JoatseWsHandler extends AbstractWebSocketHandler implements WebSock
 	 * Map WebSocketSession.sessionId-->JWSSession
 	 */
 	private ConcurrentHashMap<String, JWSSession> wsSessionMap = new ConcurrentHashMap<String, JWSSession>();
+	
+	private Thread pingPongThread;
 
 	static final String SESSION_KEY_CLOSE_REASON = "closeReason";
+
+	private static final long PING_BETWEEN_SECONDS = 20;
+	private static final long PING_TIMEOUT_SECONDS = 60;
 
 	private enum State {
 		WAITING_COMMAND, RUNNING, CLOSED;
@@ -80,15 +87,18 @@ public class JoatseWsHandler extends AbstractWebSocketHandler implements WebSock
 	@Override
 	public void afterConnectionClosed(WebSocketSession wsSession, CloseStatus status) throws Exception {
 		log.info("Ws connection closed: {}", wsSession.getId());
-		JWSSession jwsSession = wsSessionMap.remove(wsSession.getId());
+		JWSSession jwsSession = wsSessionMap.get(wsSession.getId());
 		if (jwsSession != null) {
-			UUID uuid = jwsSession.getTunnelUUID();
-			if (uuid != null) {
-				log.info("JoatseTunnel closed because WS session was closed: {}", uuid);
-				cloudTunnelService.removeTunnel(uuid);
+			try {
+				UUID uuid = jwsSession.getTunnelUUID();
+				if (uuid != null) {
+					log.info("SharedResourceLot closed because WS session was closed: {}", uuid);
+					sharingManager.removeTunnel(uuid);
+				}
+				closeSession(wsSession, "WS got closed", null); // This reason will be saved if it was not already
+			} finally {
+				wsSessionMap.remove(wsSession.getId(), jwsSession);
 			}
-			closeSession(wsSession, "WS got closed", null); // This reason will be saved if it was not already closed with
-															// a previous reason
 		}
 		String closeReason = (String) wsSession.getAttributes().getOrDefault(SESSION_KEY_CLOSE_REASON, "Closed from the client side");
 		log.info("Ws session was closed. Reason: {}", closeReason);
@@ -108,43 +118,17 @@ public class JoatseWsHandler extends AbstractWebSocketHandler implements WebSock
 			String request = js.getString("request");
 			if (request.equals("CONNECTION")) {
 				
-				Collection<TunnelRequestTcpItem> tcpTunnelReqs = new ArrayList<CloudTunnelService.TunnelRequestTcpItem>();
-				for (Object o: Optional.ofNullable(js.optJSONArray("tcpTunnels")).orElseGet(()->new JSONArray())) {
-					JSONObject jo = (JSONObject) o;
-					long targetId = jo.getLong("targetId");
-					String targetDescription = jo.optString("targetDescription");
-					String targetHostname = jo.optString("targetHostName");
-					int targetPort = jo.getInt("targetPort");
-					tcpTunnelReqs.add(new TunnelRequestTcpItem(targetId, targetDescription, targetHostname, targetPort));
-				}
-				
-				Collection<TunnelRequestHttpItem> httpTunnelReqs = new ArrayList<CloudTunnelService.TunnelRequestHttpItem>();
-				for (Object o: Optional.ofNullable(js.optJSONArray("httpTunnels")).orElseGet(()->new JSONArray())) {
-					JSONObject jo = (JSONObject) o;
-					long targetId = jo.getLong("targetId");
-					String targetDescription = jo.optString("targetDescription");
-					URL targetUrl = new URL(jo.optString("targetUrl"));
-					boolean unsafe = jo.optBoolean("unsafe", false);
-					httpTunnelReqs.add(new TunnelRequestHttpItem(targetId, targetDescription, targetUrl, unsafe));
-				}
-				
-				Optional.ofNullable(js.optJSONArray("socks5Tunnel")).ifPresent(a->{
-					JSONObject jo = a.getJSONObject(0);
-					long targetId = jo.getLong("targetId");
-					tcpTunnelReqs.add(new TunnelRequestTcpItem(targetId, "socks5", "socks5", 0));
-				});
-
-				
-				TunnelCreationResponse requestedTunnel = cloudTunnelService.requestTunnel(wsSession.getPrincipal(),
-						wsSession.getRemoteAddress(), tcpTunnelReqs, httpTunnelReqs);
-				if (!requestedTunnel.result.isDone()) {
+				LotSharingRequest lotSharingRequest = LotSharingRequest.fromJson(js, wsSession.getRemoteAddress());
+				TunnelCreationResponse requestedTunnel = sharingManager.requestTunnel(wsSession.getPrincipal(),
+						lotSharingRequest);
+				if (!requestedTunnel.getResult().isDone()) {
 					// Not done (not rejected nor error) so we ask the user to use the url to confirm the connection
 					wsSessionMap.get(wsSession.getId()).sendMessage((WebSocketMessage<?>) new TextMessage(showUserAcceptanceUriMessage(requestedTunnel)));
 				}
-				requestedTunnel.result.whenComplete((r,e)->{
+				requestedTunnel.getResult().whenComplete((r,e)->{
 					if (e == null && r != null && r.isAccepted()) {
 						Accepted acceptedTunnel = (TunnelCreationResult.Accepted)r;
-						JoatseTunnel jTunnel = acceptedTunnel.getTunnel();
+						SharedResourceLot jTunnel = acceptedTunnel.getTunnel();
 						wsSession.getAttributes().put("uuid", jTunnel.getUuid());
 						JWSSession jWSSession = wsSessionMap.get(wsSession.getId());
 						if (associateTunnel(jWSSession, jTunnel)) {
@@ -203,9 +187,25 @@ public class JoatseWsHandler extends AbstractWebSocketHandler implements WebSock
 			closeSession(wsSession, "Exception processing binary message", e);
 		}
 	}
+	
+	@Override
+	protected void handlePongMessage(WebSocketSession wsSession, PongMessage message) throws Exception {
+		JWSSession jSession = wsSessionMap.get(wsSession.getId());
+		try {
+			if (jSession == null) {
+				throw new IOException("Unexpected pong message before tunnel creation");
+			} else {
+				jSession.getSessionPingHandler().receivedPong();
+			}
+		} catch (Exception e) {
+			log.error("Exception processing pong message: " + e, e);
+			closeSession(wsSession, "Exception processing pong message", e);
+		}
+	}
 
-	private boolean associateTunnel(JWSSession jWSSession, JoatseTunnel tunnel) {
-		jWSSession.setTunnel(tunnel);
+
+	private boolean associateTunnel(JWSSession jWSSession, SharedResourceLot tunnel) {
+		jWSSession.setSharedResourceLot(tunnel);
 		try {
 			/*
 			 * This is for http(S) too, for the final link between proxied connection and
@@ -242,11 +242,11 @@ public class JoatseWsHandler extends AbstractWebSocketHandler implements WebSock
 			log.error("Exception processing channel acceptance: {}", e2, e2);
 			return false;
 		}
-		log.info("JoatseTunnel was succesfully created!!");
+		log.info("SharedResourceLot was succesfully created!!");
 		return true;
 	}
 
-	private CharSequence runningTunnelMessage(JoatseTunnel tunnel) {
+	private CharSequence runningTunnelMessage(SharedResourceLot tunnel) {
 		String cloudPublicHostname = tunnel.getCloudPublicHostname();
 		JSONObject res = new JSONObject();
 		res.put("request", "CONNECTION");
@@ -255,7 +255,7 @@ public class JoatseWsHandler extends AbstractWebSocketHandler implements WebSock
 		for (TcpTunnel i: tunnel.getTcpItems()) {
 			JSONObject j = new JSONObject();
 			j.put("listenHost", cloudPublicHostname);
-			j.put("listenPort", i.getListenAddressess());
+			j.put("listenPort", i.getListenPort());
 			j.put("targetHostname", i.targetHostname);
 			j.put("targetPort", i.targetPort);
 			tcpTunnels.add(j);
@@ -264,7 +264,7 @@ public class JoatseWsHandler extends AbstractWebSocketHandler implements WebSock
 		Collection<JSONObject> httpTunnels = new ArrayList<>();
 		for (HttpTunnel i: tunnel.getHttpItems()) {
 			JSONObject j = new JSONObject();
-			j.put("listenUrl", i.getListenAddressess());
+			j.put("listenUrl", i.getListenUrl());
 			j.put("targetUrl", i.getTargetURL());
 			httpTunnels.add(j);
 		}
@@ -276,7 +276,7 @@ public class JoatseWsHandler extends AbstractWebSocketHandler implements WebSock
 		JSONObject res = new JSONObject();
 		res.put("request", "CONNECTION");
 		res.put("response", "CONFIRM");
-		res.put("confirmationUri", requestedConnection.confirmationUri);
+		res.put("confirmationUri", requestedConnection.getConfirmationUri());
 		return res.toString();
 	}
 
@@ -300,8 +300,53 @@ public class JoatseWsHandler extends AbstractWebSocketHandler implements WebSock
 	
 	public Collection<JWSSession> getSessions(JoatseUser owner) {
 		return wsSessionMap.values().stream().filter(
-				s -> Optional.ofNullable(s.getTunnel()).map(t -> t.getOwner()).map(o -> o.equals(owner)).orElse(false))
+				s -> Optional.ofNullable(s.getSharedResourceLot()).map(t -> t.getOwner()).map(o -> o.equals(owner)).orElse(false))
 				.collect(Collectors.toList());
 	}
-		
+
+	@Override
+	public void destroy() throws Exception {
+		pingPongThread.interrupt();
+	}
+
+	@Override
+	public void afterPropertiesSet() throws Exception {
+		launchPingPong();
+	}
+
+	private void launchPingPong() {
+		pingPongThread = new Thread("pingPongThread") {
+			@Override
+			public void run() {
+				while (true) {
+					try {
+						for (JWSSession s: wsSessionMap.values()) {
+							SessionPingHandler ph = s.getSessionPingHandler();
+							long lastPingAgoSeconds = ph.getLastPingAgoSeconds();
+							if (lastPingAgoSeconds > PING_BETWEEN_SECONDS) {
+								long lastPongAgoSeconds = ph.getLastPongAgoSeconds();
+								if (lastPongAgoSeconds > lastPingAgoSeconds) {
+									// Pong is not answered
+									if (lastPingAgoSeconds > PING_TIMEOUT_SECONDS) {
+										s.close("Ping timeout after " + lastPingAgoSeconds + " seconds");
+									}
+								} else {
+									ph.sendPing();
+								}
+							}
+						}
+					} catch (Exception e) {
+						log.warn("Exception in pingPongThread", e);
+					}
+					try {
+						Thread.sleep(1000L);
+					} catch (InterruptedException e) {
+						break;
+					}
+				}
+			}
+		};
+		pingPongThread.setDaemon(true);
+		pingPongThread.start();
+	}
 }

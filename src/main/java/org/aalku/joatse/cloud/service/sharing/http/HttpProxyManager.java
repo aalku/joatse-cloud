@@ -1,4 +1,4 @@
-package org.aalku.joatse.cloud.service;
+package org.aalku.joatse.cloud.service.sharing.http;
 
 import java.io.BufferedOutputStream;
 import java.io.BufferedReader;
@@ -27,7 +27,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.Executor;
-import java.util.function.Function;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -35,8 +34,8 @@ import java.util.zip.GZIPInputStream;
 import java.util.zip.GZIPOutputStream;
 
 import org.aalku.joatse.cloud.config.ListenerConfigurationDetector;
-import org.aalku.joatse.cloud.service.CloudTunnelService.JoatseTunnel;
-import org.aalku.joatse.cloud.service.CloudTunnelService.TunnelRequestHttpItem;
+import org.aalku.joatse.cloud.service.sharing.SharingManager;
+import org.aalku.joatse.cloud.service.sharing.shared.SharedResourceLot;
 import org.aalku.joatse.cloud.tools.io.AsyncTcpPortListener;
 import org.aalku.joatse.cloud.tools.io.IOTools;
 import org.aalku.joatse.cloud.tools.io.PortRange;
@@ -89,7 +88,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
 @Component
-public class HttpProxy implements InitializingBean, DisposableBean {
+public class HttpProxyManager implements InitializingBean, DisposableBean {
 
 	private static final String COOKIE_JOATSE_HTTP_TUNNEL_TARGET_ID = "JoatseHttpTunnelTargetId";
 
@@ -105,8 +104,8 @@ public class HttpProxy implements InitializingBean, DisposableBean {
 	private static final Pattern PATTERN_CONTENT_TYPE_TEXT = Pattern.compile("^(text/.*|application/manifest[+]json.*|application/json.*|application/javascript.*)$");
 
 	public static class UrlRewriteConfig {
-		private Map<String, String> urlRewriteMap = Collections.synchronizedMap(new LinkedHashMap<>());
-		private Map<String, String> urlReverseRewriteMap = Collections.synchronizedMap(new LinkedHashMap<>());
+		Map<String, String> urlRewriteMap = Collections.synchronizedMap(new LinkedHashMap<>());
+		Map<String, String> urlReverseRewriteMap = Collections.synchronizedMap(new LinkedHashMap<>());
 	}
 	
 	private final class AsyncMiddleManServletExtension extends AsyncMiddleManServlet {
@@ -140,9 +139,7 @@ public class HttpProxy implements InitializingBean, DisposableBean {
 				HttpServletRequest httpServletRequest = (HttpServletRequest) request;
 				int serverPort = request.getServerPort();
 				String serverName = request.getServerName();
-				List<HttpTunnel> tunnelsMatching = tunnelRegistry.findMatchingHttpTunnel(remoteAddress, serverPort,
-						serverName);
-				HttpTunnel httpTunnel = tunnelsMatching.size() == 1 ? tunnelsMatching.get(0) : null;
+				HttpTunnel httpTunnel = sharingManager.getTunnelForHttpRequest(remoteAddress, serverPort, serverName, request.getScheme());
 				if (httpTunnel != null) {
 					log.info("Request {} {} for tunnel {}", httpServletRequest.getMethod(),
 							httpServletRequest.getRequestURL(), httpTunnel.getTargetId());
@@ -154,11 +151,7 @@ public class HttpProxy implements InitializingBean, DisposableBean {
 					log.warn("Request {} {} rejected", httpServletRequest.getMethod(),
 							httpServletRequest.getRequestURL());
 					((HttpServletResponse) response).sendError(404, "Unknown resource requested");
-					if (tunnelsMatching.size() > 1) {
-						throw new RuntimeException("Found several tunnels matching: " + tunnelsMatching.size());
-					} else {
-						throw new RuntimeException("Can't find tunnel matching");
-					}
+					throw new RuntimeException("Can't find tunnel matching");
 				}
 			} catch (Exception e) {
 				log.error("Error " + request, e);
@@ -200,7 +193,7 @@ public class HttpProxy implements InitializingBean, DisposableBean {
 							StringWriter out = new StringWriter();
 							CharBuffer buffer = CharBuffer.allocate(field.getValue().length());
 							buffer.put(field.getValue());
-							boolean match = IOTools.rewriteStringContent(buffer, new PrintWriter(out), true, PATTERN_URL_PREFFIX, hTunnel.getUrlReverseRewriteFunction(getRemoteInetAddress(clientRequest)));
+							boolean match = IOTools.rewriteStringContent(buffer, new PrintWriter(out), true, PATTERN_URL_PREFFIX, hTunnel.getUrlReverseRewriteFunction());
 							change = change || match;
 							newList.add(out.toString());
 						}
@@ -240,7 +233,11 @@ public class HttpProxy implements InitializingBean, DisposableBean {
 			if (!validateDestination(clientRequest.getServerName(), clientRequest.getServerPort()))
 				return null;
 			try {
-				URL clientURL = new URL(clientRequest.getRequestURL().toString());
+				StringBuffer sbuff = clientRequest.getRequestURL();
+		        String query = clientRequest.getQueryString();
+		        if (query != null)
+		        	sbuff.append("?").append(query);
+				URL clientURL = new URL(sbuff.toString());
 
 				HttpTunnel tunnel = (HttpTunnel) clientRequest.getAttribute(REQUEST_KEY_HTTPTUNNEL);
 				String targetUrl = rewriteUrl(clientURL, tunnel);
@@ -345,7 +342,7 @@ public class HttpProxy implements InitializingBean, DisposableBean {
 		protected ContentTransformer newServerResponseContentTransformer(HttpServletRequest clientRequest,
 				HttpServletResponse proxyResponse, Response serverResponse) {
 			HttpTunnel httpTunnel = (HttpTunnel) clientRequest.getAttribute(REQUEST_KEY_HTTPTUNNEL);
-			JoatseTunnel tunnel = httpTunnel.getTunnel();
+			SharedResourceLot tunnel = httpTunnel.getTunnel();
 			URL clientRequestUrl = IOTools.runUnchecked(()->new URL(serverResponse.getRequest().getURI().toString()));
 			URL proxyRequestUrl = IOTools.runUnchecked(()->new URL(clientRequest.getRequestURL().toString()));
 
@@ -372,7 +369,7 @@ public class HttpProxy implements InitializingBean, DisposableBean {
 						while (true) {
 							int r = in.read(buffer);
 							if (r < 0) {
-								IOTools.rewriteStringContent(buffer, out, true, PATTERN_URL_PREFFIX, httpTunnel.getUrlRewriteFunction(getRemoteInetAddress(clientRequest)));
+								IOTools.rewriteStringContent(buffer, out, true, PATTERN_URL_PREFFIX, httpTunnel.getUrlRewriteFunction());
 								in.close();
 								out.close();
 								return true;
@@ -380,7 +377,7 @@ public class HttpProxy implements InitializingBean, DisposableBean {
 								if (r > 0 && buffer.hasRemaining()) {
 									continue; // Buffer must be full if not last
 								}
-								IOTools.rewriteStringContent(buffer, out, false, PATTERN_URL_PREFFIX, httpTunnel.getUrlRewriteFunction(getRemoteInetAddress(clientRequest)));
+								IOTools.rewriteStringContent(buffer, out, false, PATTERN_URL_PREFFIX, httpTunnel.getUrlRewriteFunction());
 							}
 						}
 					} else {
@@ -440,143 +437,7 @@ public class HttpProxy implements InitializingBean, DisposableBean {
 		}
 	}
 
-	public static class HttpTunnel {
-
-		public HttpTunnel(JoatseTunnel tunnel, long targetId, String targetDescription, URL targetURL, boolean unsafe) {
-			this.tunnel = tunnel;
-			this.targetId = targetId;
-			this.targetDescription = targetDescription;
-			this.targetURL = targetURL;
-			this.unsafe = unsafe;
-		}
-
-		private final JoatseTunnel tunnel;
-
-		final long targetId;
-		
-		private Map<InetAddress, UrlRewriteConfig> urlRewriteConfigMap = new LinkedHashMap<>();
-
-		private final Map<InetAddress, HttpProxy.ListenAddress> listenAddresses = new LinkedHashMap<>();
-
-		private final String targetDescription;
-		private final URL targetURL;
-
-		private final boolean unsafe;
-
-
-		public String getTargetDomain() {
-			return targetURL.getHost();
-		}
-
-		public int getTargetPort() {
-			return Optional.of(targetURL.getPort()).map(p -> p <= 0 ? targetURL.getDefaultPort() : p).get();
-		}
-
-		public URL getTargetURL() {
-			return targetURL;
-		}
-
-		public String getTargetProtocol() {
-			return targetURL.getProtocol();
-		}
-
-		public String getTargetDescription() {
-			return targetDescription;
-		}
-
-		public long getTargetId() {
-			return targetId;
-		}
-
-		public JoatseTunnel getTunnel() {
-			return tunnel;
-		}
-		
-		public synchronized Function<String, String> getUrlRewriteFunction(InetAddress addr) {
-			return Optional.ofNullable(urlRewriteConfigMap.get(addr))
-					.map((UrlRewriteConfig x) -> ((Function<String, String>) y -> x.urlRewriteMap.getOrDefault(y, y)))
-					.orElse(y -> y);
-		}
-
-		public synchronized Function<String, String> getUrlReverseRewriteFunction(InetAddress addr) {
-			return Optional.ofNullable(urlRewriteConfigMap.get(addr))
-					.map((UrlRewriteConfig x) -> ((Function<String, String>) y -> x.urlReverseRewriteMap.getOrDefault(y, y)))
-					.orElse(y -> y);
-		}
-
-		public synchronized boolean matches(InetAddress remoteAddress, int serverPort, String serverName) {
-			return Optional.ofNullable(listenAddresses.get(remoteAddress))
-					.filter(x -> x.listenPort == serverPort && x.cloudHostname.equals(serverName)).isPresent();
-		}
-
-		public synchronized boolean isUnsafe() {
-			return this.unsafe;
-		}
-
-		public synchronized void registerListenAllowedAddress(InetAddress allowedAddress, String hostString, int serverPort, String serverProtocol) {
-			if (listenAddresses.containsKey(allowedAddress)) {
-				throw new IllegalStateException("You can allow each address only once");
-			} else {
-				listenAddresses.put(allowedAddress, new ListenAddress(serverPort, hostString, serverProtocol));
-				
-				UrlRewriteConfig config = new UrlRewriteConfig();
-				urlRewriteConfigMap.put(allowedAddress, config);
-
-				String tuu = serverProtocol + "://" + hostString + ":" + serverPort;
-				
-				URL tau = targetURL;
-				int tPort = IOTools.getPort(tau);
-				String tProtocol = tau.getProtocol();
-				String tHost = tau.getHost();
-				boolean tPortIsOptional = (tPort == 80 && tProtocol.equals("http")) || tPort == 443 && tProtocol.equals("https");
-				String taus1 = tProtocol + "://" + tHost + ":" + tPort;
-				Optional<String> taus2 = tPortIsOptional ? Optional.of(tProtocol + "://" + tHost) : Optional.empty();
-
-				// FIXME tuu might have an optional port too
-
-				config.urlRewriteMap.put(taus1, tuu);
-				if (taus2.isPresent()) {
-					config.urlRewriteMap.put(taus2.get(), tuu);
-					config.urlReverseRewriteMap.put(tuu, taus2.get());
-				} else {
-					config.urlReverseRewriteMap.put(tuu, taus1);
-				}
-			}
-		}
-
-		public synchronized void unregisterListenAllowedAddress(InetAddress allowedAddress) {
-			if (listenAddresses.remove(allowedAddress) != null) {
-				throw new IllegalStateException("You can only remove allowed addresses");
-			}
-			urlRewriteConfigMap.remove(allowedAddress);
-		}
-
-		public Map<InetAddress, URL> getListenAddressess() {
-			return listenAddresses.entrySet().stream()
-					.collect(Collectors.toMap(e -> (InetAddress)e.getKey(), e -> e.getValue().getListenUrl(Optional.of(this.getTargetURL().getFile()))));
-		}
-
-	}
-
-	public static class ListenAddress {
-		private final int listenPort;
-		private final String cloudProtocol;
-		private final String cloudHostname;
-		public ListenAddress(int listenPort, String cloudHostname, String cloudProtocol) {
-			this.listenPort = listenPort;
-			this.cloudProtocol = cloudProtocol;
-			this.cloudHostname = cloudHostname;
-		}
-		public URL getListenUrl(Optional<String> file) {
-			try {
-				return new URL(cloudProtocol, cloudHostname, listenPort, file.orElse(""));
-			} catch (MalformedURLException e) {
-				throw new RuntimeException(e.toString(), e);
-			}
-		}
-	}
-
-	static Logger log = LoggerFactory.getLogger(HttpProxy.class);
+	static Logger log = LoggerFactory.getLogger(HttpProxyManager.class);
 	static Logger logJetty = LoggerFactory.getLogger(org.eclipse.jetty.proxy.AsyncProxyServlet.class);
 
 	@Autowired
@@ -604,7 +465,7 @@ public class HttpProxy implements InitializingBean, DisposableBean {
 	private AsyncTcpPortListener<Void> switchboardPortListener;
 
 	@Autowired
-	private TunnelRegistry tunnelRegistry;
+	public SharingManager sharingManager;
 
 	private Server unsafeClientProxyServer;
 	private Server normalProxyServer;
@@ -711,10 +572,6 @@ public class HttpProxy implements InitializingBean, DisposableBean {
 		servletContextHandler.setContextPath("/");
 		servletContextHandler.addServlet(proxyHolder(servlet), "/*");
 		return servletContextHandler;
-	}
-
-	public HttpTunnel newHttpTunnel(JoatseTunnel tunnel, TunnelRequestHttpItem r) {
-		return new HttpTunnel(tunnel, r.targetId, r.targetDescription, r.targetUrl, r.unsafe);
 	}
 
 	private static String mapToString(Map<String, Object> context) {

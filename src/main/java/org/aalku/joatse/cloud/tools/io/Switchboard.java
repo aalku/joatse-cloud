@@ -1,16 +1,12 @@
 package org.aalku.joatse.cloud.tools.io;
 
-import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.channels.AsynchronousSocketChannel;
 import java.nio.charset.Charset;
 import java.util.UUID;
-import java.util.concurrent.CompletionException;
 import java.util.function.Consumer;
 
-import org.aalku.joatse.cloud.service.CloudTunnelService;
-import org.aalku.joatse.cloud.service.HttpProxy.HttpTunnel;
-import org.aalku.joatse.cloud.service.TunnelRegistry;
+import org.aalku.joatse.cloud.service.sharing.SharingManager;
 import org.aalku.joatse.cloud.tools.io.AsyncTcpPortListener.Event;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -64,10 +60,10 @@ public class Switchboard implements InitializingBean, DisposableBean, Consumer<E
 	private AsyncTcpPortListener<Void> switchboardPortListener;
 	
 	@Autowired
-	private CloudTunnelService cloudTunnelService; // TODO the tunnel will run through it.
+	private SharingManager sharingManager; // TODO the tunnel will run through it.
 
-	@Autowired
-	private TunnelRegistry tunnelRegistry;
+//	@Autowired
+//	private TunnelRegistry tunnelRegistry;
 
 	@Override
 	public void afterPropertiesSet() throws Exception {
@@ -97,25 +93,24 @@ public class Switchboard implements InitializingBean, DisposableBean, Consumer<E
 		IOTools.asyncReadWholeBuffer(channel, headerBuffer).thenAcceptAsync(n->{
 			UUID uuid = new UUID(headerBuffer.getLong(), headerBuffer.getLong());
 			long targetId = headerBuffer.getLong();
-			HttpTunnel httpTarget = tunnelRegistry.getHttpTunnel(uuid, targetId);
-			if (httpTarget == null) {
-				log.warn("Unexpected connection or wrong protocol: {}.{}", uuid, targetId);
-				IOTools.closeChannel(channel);
-				return;
+			
+			Object context = sharingManager.httpClientEndConnected(uuid, targetId);			
+			if (context != null) {
+				try {
+					IOTools.asyncWriteWholeBuffer(channel, ByteBuffer.wrap(new byte[] {0})) // send 0 = OK
+					.thenAccept(x -> {
+						try {
+							log.info("Switchboard proxy is ready: {}.{}", uuid, targetId);
+							sharingManager.httpClientEndConnectionReady(context, channel);
+						} catch (Exception e1) {
+							reportErrorThenClose(channel, 2, e1.toString());
+						}
+					}).exceptionally(e->null);
+				} catch (Exception e1) {
+					reportErrorThenClose(channel, 2, e1.toString());
+				}
 			} else {
-				log.info("Switchboard Received Tunnel connection: {}.{}", uuid, targetId);
-			}
-			InetSocketAddress remote = new InetSocketAddress(httpTarget.getTargetDomain(), httpTarget.getTargetPort());
-			try {
-				IOTools.asyncWriteWholeBuffer(channel, ByteBuffer.wrap(new byte[] {0})) // send 0 = OK
-				.thenAccept(x -> {
-					log.info("Switchboard proxy is ready: {}.{}", uuid, targetId);
-					httpTarget.getTunnel().tunnelTcpConnection(targetId, channel);
-					// TODO schedule a periodic check to log the disconnection
-				}).exceptionally(e->null); // TODO 
-			} catch (Exception e1) {
-				reportErrorThenClose(channel, 2, e1.toString());
-				throw new CompletionException("Error connecting to http target: " + remote, e1);
+				IOTools.closeChannel(channel);
 			}
 		}).exceptionally(e->{
 			log.error("Switchboard error handling http connection: " + e, e);

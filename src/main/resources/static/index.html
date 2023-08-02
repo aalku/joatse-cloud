@@ -43,7 +43,15 @@
 										<label :for="`s-ai-${s.uuid}`">Allowed IP address</label>
 									</b-col>
 									<b-col sm="8">
+										<b-input-group>
 										<b-form-input :id="`s-ai-${s.uuid}`" v-model="s.allowedAddress.join(',')" readonly></b-form-input>
+											<b-input-group-append>
+												<b-button variant="outline-secondary" @click="allowMyIP(s)"><b-icon-person-check/></b-button>
+												<b-button variant="outline-secondary" @click="shareLink(s)" disabled><b-icon-share/></b-button>
+												<b-button variant="outline-secondary" @click="clearAllowedIPs(s)" disabled><b-icon-x-circle-fill/></b-button>
+											</b-input-group-append>
+											<b-alert variant="success" :show="showCopiedToClipboard_shareLink" dismissible>Share link copied to clipboard</b-alert>
+										</b-input-group>
 									</b-col>
 								</b-row>
 							</b-container>
@@ -74,6 +82,38 @@
 									</b-col>
 								</b-row>
 							</b-container>
+
+							<b-container fluid class="mt-3" v-if="s.preconfirmedShare">
+								<b-row>
+									<b-col sm="4">
+										Pre-confirm command line argument
+									</b-col>
+									<b-col sm="8">
+										<b-input-group>
+											<b-form-input :id="`s-saved-${s.uuid}`" :value="`--preconfirmed=${s.preconfirmedShare.uuid}`" readonly></b-form-input>
+											<b-input-group-append>
+												<b-button variant="outline-secondary" @click="copyToClipboard(`--preconfirmed=${s.preconfirmedShare.uuid}`, 'showCopiedToClipboard_preconfirmed')">
+													<b-icon-files />
+												</b-button>
+												<b-button variant="outline-secondary" @click="clearPreconfirm(s.preconfirmedShare.uuid)"><b-icon-x-circle-fill/></b-button>
+											</b-input-group-append>
+										</b-input-group>
+										<b-alert variant="success" :show="showCopiedToClipboard_preconfirmed" dismissible>Copied to clipboard</b-alert>
+									</b-col>
+								</b-row>
+							</b-container>
+							<b-container fluid class="mt-3" v-if="!s.preconfirmedShare">
+								<b-row>
+									<b-col sm="4">
+										You can pre-confirm this shared resource lot for later
+									</b-col>
+									<b-col sm="8">
+										<b-button :id="`s-save-${s.uuid}`" variant="outline-secondary" @click="preconfirm(s)"><b-icon-box-arrow-in-down/></b-button>
+									</b-col>
+								</b-row>
+							</b-container>
+
+
 						</b-card-body>
 					</b-collapse>
 				</b-card>
@@ -92,7 +132,61 @@
 			</ol>
 			</p>
 		</div>
-	
+		<div v-if="sessions.preconfirmedShares.filter(x=>!x.onLiveSession).length">
+			<h2>Your preconfirmed shares</h2>
+			<div class="accordion" role="tablist">
+				<b-card no-body class="mb-1" v-for="(ps, iPS) in sessions.preconfirmedShares.filter(x=>!x.onLiveSession)" :key="ps.uuid">
+					<b-card-header header-tag="header" class="p-1" role="tab">
+						<b-button block v-b-toggle.accordion-1 variant="outline-primary">Preconfirmed share {{ps.uuid}}</b-button>
+					</b-card-header>
+					<b-collapse id="accordion-1" accordion="session-accordion" role="tabpanel">
+						<b-card-body>
+							<b-container fluid>
+								<b-row v-for="(t, it) in ps.tcpTunnels" :key="t.targetId">
+									<b-col sm="4">
+										<label :for="`tcp-s-${t.targetId}`">TCP Socket listening<span v-if="t.targetDescription"> -
+												{{t.targetDescription}}</span></label>
+									</b-col>
+									<b-col sm="8">
+										<b-form-input :id="`tcp-s-${t.targetId}`" v-model="t.description" readonly></b-form-input>
+									</b-col>
+								</b-row>
+							</b-container>
+							<b-container fluid>
+								<b-row v-for="(h, ih) in ps.httpTunnels" :key="h.targetId">
+									<b-col sm="4">
+										<label :for="`http-s-${h.targetId}`">HTTP Tunnel<span v-if="h.targetDescription"> -
+												{{h.targetDescription}}</span></label>
+									</b-col>
+									<b-col sm="8">
+										<b-form-input :id="`http-s-${h.targetId}`" v-model="h.description" readonly></b-form-input>
+									</b-col>
+								</b-row>
+							</b-container>
+							<b-container fluid class="mt-3">
+								<b-row>
+									<b-col sm="4">
+										Pre-confirm command line argument
+									</b-col>
+									<b-col sm="8">
+										<b-input-group>
+											<b-form-input :value="`--preconfirmed=${ps.uuid}`" readonly></b-form-input>
+											<b-input-group-append>
+												<b-button variant="outline-secondary" @click="copyToClipboard(`--preconfirmed=${ps.uuid}`, 'showCopiedToClipboard_preconfirmed2')">
+													<b-icon-files />
+												</b-button>
+												<b-button variant="outline-secondary" @click="clearPreconfirm(ps.uuid)"><b-icon-x-circle-fill/></b-button>
+											</b-input-group-append>
+										</b-input-group>
+										<b-alert variant="success" :show="showCopiedToClipboard_preconfirmed2" dismissible>Copied to clipboard</b-alert>
+									</b-col>
+								</b-row>
+							</b-container>
+						</b-card-body>
+					</b-collapse>
+				</b-card>
+			</div>
+		</div>
 	</div>
 </body>
 </html>
