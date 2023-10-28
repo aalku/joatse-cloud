@@ -10,12 +10,13 @@ import org.aalku.joatse.cloud.tools.io.IOTools;
 
 public class HttpTunnel {
 
-	public HttpTunnel(SharedResourceLot tunnel, long targetId, String targetDescription, URL targetURL, boolean unsafe) {
+	public HttpTunnel(SharedResourceLot tunnel, long targetId, String targetDescription, URL targetURL, boolean unsafe, String listenHostname) {
 		this.tunnel = tunnel;
 		this.targetId = targetId;
 		this.targetDescription = targetDescription;
 		this.targetURL = targetURL;
 		this.unsafe = unsafe;
+		this.listenAddress = new ListenAddress(0, listenHostname, null);
 	}
 
 	private final SharedResourceLot tunnel;

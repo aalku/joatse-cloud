@@ -2,7 +2,9 @@ package org.aalku.joatse.cloud.service.user.vo;
 
 import java.io.Serializable;
 import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
@@ -29,6 +31,10 @@ import jakarta.persistence.UniqueConstraint;
 @Table(uniqueConstraints = @UniqueConstraint(columnNames = { "login" }))
 public class JoatseUser implements UserDetails, Serializable {
 	
+
+	public static final String ATTRIB_KEY_UUID = "uuid";
+	public static final String ATTRIB_KEY_LOGIN = "login";
+	public static final String ATTRIB_KEY_EMAIL = "email";
 
 	public static final String ROLE_JOATSE_USER = "ROLE_JOATSE_USER";
 
@@ -213,6 +219,14 @@ public class JoatseUser implements UserDetails, Serializable {
 	public Optional<Long> getBandwithLimit() {
 		// TODO Auto-generated method stub
 		return Optional.empty();
+	}
+
+	public Map<String, String> asAttributeMap() {
+		LinkedHashMap<String, String> res = new LinkedHashMap<>();
+		res.put(ATTRIB_KEY_UUID, uuid.toString());
+		res.put(ATTRIB_KEY_LOGIN, login);
+		getEmail().ifPresent(email->res.put(ATTRIB_KEY_EMAIL, email));
+		return res;
 	}
 
 }

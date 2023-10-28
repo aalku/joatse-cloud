@@ -4,6 +4,7 @@ import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.LinkedBlockingQueue;
 
+import org.aalku.joatse.cloud.tools.io.BandwithCalculator.OneWayBandwithCalculator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.web.socket.WebSocketMessage;
@@ -28,6 +29,7 @@ public class WebSocketSendWorker extends Thread {
 	private BlockingQueue<Item> queue;
 	private WebSocketSession session;
 	private BandwithLimiter bandwithLimiter;
+	private OneWayBandwithCalculator bandwithCalculator;
 
 	public WebSocketSendWorker(WebSocketSession session) {
 		this.session = session;
@@ -53,7 +55,9 @@ public class WebSocketSendWorker extends Thread {
 				Item item = queue.take();
 				try {
 					session.sendMessage(item.message);
-					bandwithLimiter.next(item.message.getPayloadLength()).sleep();
+					int bytes = item.message.getPayloadLength();
+					bandwithLimiter.next(bytes).sleep();
+					bandwithCalculator.reportPacket(bytes);
 				} catch (Exception e) {
 					item.future.completeExceptionally(e);
 					continue;
@@ -72,6 +76,10 @@ public class WebSocketSendWorker extends Thread {
 
 	public void setBandwithLimiter(BandwithLimiter bandwithLimiter) {
 		this.bandwithLimiter = bandwithLimiter;
+	}
+
+	public void setBandwithCalculator(OneWayBandwithCalculator bandwithCalculator) {
+		this.bandwithCalculator = bandwithCalculator;
 	}
 
 }

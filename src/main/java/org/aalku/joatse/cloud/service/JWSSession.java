@@ -14,6 +14,8 @@ import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.BiConsumer;
 
 import org.aalku.joatse.cloud.service.sharing.shared.SharedResourceLot;
+import org.aalku.joatse.cloud.tools.io.BandwithCalculator.OneWayTraffic;
+import org.aalku.joatse.cloud.tools.io.BandwithCalculator.TwoWayBandwithCalculator;
 import org.aalku.joatse.cloud.tools.io.BandwithLimiter;
 import org.aalku.joatse.cloud.tools.io.IOTools;
 import org.aalku.joatse.cloud.tools.io.WebSocketSendWorker;
@@ -46,6 +48,8 @@ public class JWSSession {
 
 	private BandwithLimitManager bandwithLimitManager;
 	
+	private TwoWayBandwithCalculator bandwithCalculator = new TwoWayBandwithCalculator();
+
 	private final SessionPingHandler sessionPingHandler = new SessionPingHandler();
 	
 	/** Ping stats and sending, but it's scheduled from the outside */
@@ -75,6 +79,11 @@ public class JWSSession {
 //			log.info("Sending ping to " + getTunnelUUID());
 			wsSendWorker.sendMessage(new PingMessage());
 			lastPingNanoTime.set(System.nanoTime());
+
+//			// Nothing to do with the ping
+//			long bpsIn = bandwithCalculator.getTrafficIn().getBps();
+//			long bpsOut = bandwithCalculator.getTrafficOut().getBps();
+//			log.info("Bandwith of session {} = {}/{}", getTunnelUUID(), bpsIn/1024.0, bpsOut/1024.0);
 		}
 
 		public void receivedPong() {
@@ -125,6 +134,7 @@ public class JWSSession {
 	private void setBandwithLimiter(BandwithLimiter bandwithLimiter) {
 		this.bandwithLimiter = bandwithLimiter;
 		this.wsSendWorker.setBandwithLimiter(bandwithLimiter);
+		this.wsSendWorker.setBandwithCalculator(bandwithCalculator.getOneWayOut());
 	}
 
 	void addTunnelConnection(TunnelTcpConnection c) {
@@ -155,8 +165,9 @@ public class JWSSession {
 	}
 
 	public void handleBinaryMessage(BinaryMessage message) throws IOException {
+		ByteBuffer buffer = message.getPayload();
+		int bytes = message.getPayloadLength();
 		try {
-			ByteBuffer buffer = message.getPayload();
 			int version = buffer.get();
 			if (version != TunnelTcpConnection.PROTOCOL_VERSION) {
 				throw new IOException("Unsupported BinaryMessage protocol version: " + version);
@@ -188,7 +199,8 @@ public class JWSSession {
 				throw new IOException("Unsupported BinaryMessage message type: " + type);
 			}
 		} finally {
-			bandwithLimiter.next(message.getPayloadLength()).sleep();
+			bandwithLimiter.next(bytes).sleep();
+			bandwithCalculator.reportPacketIn(bytes);
 		}
 	}
 
@@ -227,5 +239,15 @@ public class JWSSession {
 	public SessionPingHandler getSessionPingHandler() {
 		return sessionPingHandler;
 	}
+
+	public OneWayTraffic getTrafficIn() {
+		return bandwithCalculator.getTrafficIn();
+	}
+
+	public OneWayTraffic getTrafficOut() {
+		return bandwithCalculator.getTrafficOut();
+	}
+	
+	
 
 }

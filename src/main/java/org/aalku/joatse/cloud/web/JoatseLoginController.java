@@ -1,17 +1,25 @@
 package org.aalku.joatse.cloud.web;
 
+import java.io.IOException;
 import java.net.URL;
+import java.security.GeneralSecurityException;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ExecutionException;
+import java.util.stream.Collectors;
 
 import org.aalku.joatse.cloud.config.WebSecurityConfiguration;
 import org.aalku.joatse.cloud.service.user.UserManager;
 import org.aalku.joatse.cloud.service.user.vo.JoatseUser;
 import org.aalku.joatse.cloud.tools.io.AsyncEmailSender;
+import org.aalku.joatse.cloud.web.jwt.GoogleTokenVerifier;
+import org.aalku.joatse.cloud.web.jwt.JWTAuthorizationFilter;
+import org.aalku.joatse.cloud.web.jwt.TokenVerifier;
+import org.json.JSONObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.InitializingBean;
@@ -27,6 +35,9 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseBody;
+
+import jakarta.servlet.http.Cookie;
+import jakarta.servlet.http.HttpServletResponse;
 
 @Controller
 public class JoatseLoginController implements InitializingBean {
@@ -44,7 +55,9 @@ public class JoatseLoginController implements InitializingBean {
 	
 	private String oauthLoginBaseUrl = OAuth2AuthorizationRequestRedirectFilter.DEFAULT_AUTHORIZATION_REQUEST_BASE_URI;
 	
-	private Map<String, String> oauth2Registrations = null;
+	private Map<String, JSONObject> oauth2Registrations = null;
+	
+	private Map<ClientRegistration, TokenVerifier> externalTokenVerifiers = null;
 	
 	@Autowired
 	private AsyncEmailSender asyncEmailSender;
@@ -185,13 +198,13 @@ public class JoatseLoginController implements InitializingBean {
 
 	@GetMapping(path = "/loginForm/options", produces = "application/json")
 	@ResponseBody
-	public Map<String, Object> getOptions() {
-		Map<String, Object> res = new LinkedHashMap<>();
+	public String getOptions() {
+		JSONObject res = new JSONObject();
 		res.put("loginPasswordEnabled", loginPasswordEnabled);
 		res.put("oauth2Registrations", oauth2Registrations);
-		return res;
+		return res.toString(2);
 	}
-
+	
 	@GetMapping("/loginForm")
 	public String login() {
 		return "forward:login.html";
@@ -205,12 +218,22 @@ public class JoatseLoginController implements InitializingBean {
 
 	private void setupOAuth2Registrations() {
 		oauth2Registrations = new LinkedHashMap<>();
+		externalTokenVerifiers = new LinkedHashMap<>();
 		if (clientRegistrationRepository instanceof Iterable) {
 			@SuppressWarnings("unchecked")
 			Iterable<ClientRegistration> it = (Iterable<ClientRegistration>)clientRegistrationRepository;
 			for (ClientRegistration x: it) {
 				if (x.getAuthorizationGrantType().getValue().equals("authorization_code")) {
-					oauth2Registrations.put(x.getClientName(), oauthLoginBaseUrl + "/" + x.getRegistrationId());
+					String registrationId = x.getRegistrationId();
+					
+					JSONObject jsonObject = new JSONObject();
+					jsonObject.put("oauthLoginUrl", oauthLoginBaseUrl + "/" + registrationId);
+					jsonObject.put("clientId", x.getClientId());
+					oauth2Registrations.put(x.getClientName(), jsonObject);
+					
+					if (registrationId.equals("google")) {
+						externalTokenVerifiers.put(x, new GoogleTokenVerifier(Collections.singletonList(x.getClientId())));
+					}
 				}
 			}
 		}
@@ -222,4 +245,41 @@ public class JoatseLoginController implements InitializingBean {
 			throw new IllegalStateException("In order to enable email verification the email sending must be configured");
 		}
 	}
+	
+	/**
+	 * Gateway to validate external JWT and set our own JWT on success
+	 */
+	@PostMapping(path = WebSecurityConfiguration.PATH_LOGIN_POST + "/external-jwt", produces = "application/json")
+	@ResponseBody
+	public String externalJwtGateway(@RequestBody String token, HttpServletResponse response) throws GeneralSecurityException, IOException {
+		Optional<Map<String, Object>> verifiedToken = externalTokenVerifiers.values().stream().map(x -> {
+			try {
+				return x.verifyToken(token);
+			} catch (Exception e) {
+				log.error("Error verifying token: " + e, e);
+				return null;
+			}
+		}).findFirst();
+		JSONObject res = new JSONObject();
+		if (verifiedToken.isPresent()) {
+			res.put("email", verifiedToken.get().get("email"));
+			res.put("google_details", verifiedToken.get());
+			
+			JoatseUser user = userManager.findUserFromExternalToken(verifiedToken.get());
+			if (user != null) {
+				res.put("authorities", user.getAuthorities().stream().map(a->a.getAuthority()).collect(Collectors.toList()));
+				String jwt = userManager.generateJwt(user);
+				Cookie cookie = new Cookie(JWTAuthorizationFilter.COOKIE_JWT_KEY, jwt);
+				cookie.setPath("/");
+				response.addCookie(cookie);
+				res.put("jwt", jwt);
+			} else {
+				res.put("error", "User is not authorized");
+			}
+		} else {
+			res.put("error", "Invalid token");
+		}
+		return res.toString(2);
+	}
+
 }

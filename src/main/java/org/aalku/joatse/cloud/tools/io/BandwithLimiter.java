@@ -93,7 +93,7 @@ public class BandwithLimiter {
 	
 	private LinkedBlockingDeque<MeasureWindow> windows = new LinkedBlockingDeque<>();
 
-	private long maxPauseNanos;
+	private long maxPauseNanos = TimeUnit.SECONDS.toNanos(20); // A lot
 
 	public Long getLimitBps() {
 		return Optional.of(limitBps.get()).filter(n -> n > 0L).orElse(null);

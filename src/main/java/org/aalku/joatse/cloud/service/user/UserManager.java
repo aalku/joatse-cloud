@@ -10,6 +10,7 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Optional;
 import java.util.Random;
@@ -17,6 +18,7 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
+import java.util.stream.Collectors;
 
 import org.aalku.joatse.cloud.config.WebSecurityConfiguration;
 import org.aalku.joatse.cloud.service.user.repository.EmailVerificationTokenRepository;
@@ -30,11 +32,13 @@ import org.aalku.joatse.cloud.service.user.vo.OAuth2UserWrapper;
 import org.aalku.joatse.cloud.service.user.vo.OidcUserWrapper;
 import org.aalku.joatse.cloud.service.user.vo.PasswordResetToken;
 import org.aalku.joatse.cloud.tools.io.AsyncEmailSender;
+import org.aalku.joatse.cloud.web.jwt.JoatseTokenManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
 import org.springframework.mail.SimpleMailMessage;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.GrantedAuthority;
@@ -58,6 +62,7 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 @Component
+@Configuration
 public class UserManager {
 
 	public static final GrantedAuthority AUTHORITY_NOT_USER = new SimpleGrantedAuthority("NOT_USER");
@@ -82,6 +87,9 @@ public class UserManager {
 	
 	@Autowired
 	private AsyncEmailSender asyncEmailSender;
+
+	@Autowired
+	private JoatseTokenManager joatseJwtTokenManager;
 
 	private Logger log = LoggerFactory.getLogger(UserManager.class);
 
@@ -131,14 +139,18 @@ public class UserManager {
 	protected JoatseUser searchLinkedLocalUser(OAuth2User oauth2User) {
 		String iss = Optional.ofNullable(oauth2User.getAttribute("iss")).map(o->o.toString()).orElse(null);
 		String sub = oauth2User.getAttribute("sub");
+		String email = Optional.ofNullable(oauth2User.getAttribute("email")).map(a -> (String) a)
+				.filter(m -> !m.trim().isEmpty()).orElse(null);
+		return findIssSubUser(iss, sub, email);
+	}
+
+	private JoatseUser findIssSubUser(String iss, String sub, String email) {
 		if (iss != null && sub != null) {
 			OAuth2IssSubAccount account = oauth2IssSubAccountRepository.findByIssAndSub(iss, sub);
 			if (account != null && account.getUser() != null) {
 				log.info("Account found: {}", account.getUser());
 				return account.getUser();
 			} else {
-				String email = Optional.ofNullable(oauth2User.getAttribute("email")).map(a -> (String) a)
-						.filter(m -> !m.trim().isEmpty()).orElse(null);
 				if (email != null && adminMailAccounts.contains(email)) {
 					JoatseUser user = userRepository.findByLogin(email);
 					if (user == null) {
@@ -173,9 +185,17 @@ public class UserManager {
 		}
 		return null;
 	}
+	
+	public JoatseUser findUserFromExternalToken(Map<String, Object> tokenDetails) {
+		String iss = Optional.ofNullable(tokenDetails.get("iss")).map(o->o.toString()).orElse(null);
+		String sub = (String) tokenDetails.get("sub");
+		String email = Optional.ofNullable(tokenDetails.get("email")).map(a -> (String) a)
+				.filter(m -> !m.trim().isEmpty()).orElse(null);
+		return findIssSubUser(iss, sub, email);
+	}
 
 	@Bean
-	public JoatseUserDetailsManager userDetailsService() {
+	JoatseUserDetailsManager userDetailsService() {
 		JoatseUser admin = userRepository.findByLogin("admin");
 		if (admin == null || admin.getPassword() == null || admin.getPassword().trim().isEmpty()) {
 			admin = JoatseUser.newLocalUser("admin", false);
@@ -414,5 +434,10 @@ public class UserManager {
 
 	public boolean isEmailEnabled() {
 		return asyncEmailSender.isEnabled();
+	}
+
+	public String generateJwt(JoatseUser user) {
+		List<String> authorities = user.getAuthorities().stream().map(a->a.getAuthority()).collect(Collectors.toList());		
+		return joatseJwtTokenManager.generateToken(user.asAttributeMap(), authorities);
 	}
 }

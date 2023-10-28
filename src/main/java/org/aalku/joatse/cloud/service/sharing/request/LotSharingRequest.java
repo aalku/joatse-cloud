@@ -77,7 +77,7 @@ public class LotSharingRequest {
 			String targetDescription = jo.optString("targetDescription");
 			URL targetUrl = new URL(jo.optString("targetUrl"));
 			boolean unsafe = jo.optBoolean("unsafe", false);
-			httpTunnelReqs.add(new TunnelRequestHttpItem(targetId, targetDescription, targetUrl, unsafe));
+			httpTunnelReqs.add(new TunnelRequestHttpItem(targetId, targetDescription, targetUrl, unsafe, Optional.empty())); // TODO
 		}
 		
 		Optional.ofNullable(js.optJSONArray("socks5Tunnel")).ifPresent(a->{

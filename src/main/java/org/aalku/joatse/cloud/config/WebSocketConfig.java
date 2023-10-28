@@ -18,7 +18,7 @@ public class WebSocketConfig implements WebSocketConfigurer {
 	private WebSocketHandler joatseWsHandler;
 
 	public void registerWebSocketHandlers(WebSocketHandlerRegistry registry) {
-		registry.addHandler(joatseWsHandler, CONNECTION_HTTP_PATH);
+		registry.addHandler(joatseWsHandler, CONNECTION_HTTP_PATH).withSockJS();
 	}
 
 }

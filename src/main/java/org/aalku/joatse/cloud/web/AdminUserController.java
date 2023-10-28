@@ -60,10 +60,10 @@ public class AdminUserController {
 	@ResponseBody
 	public Map<String, Object> postUser(@RequestBody Map<String, Object> userMap) {
 		String login = Optional.ofNullable((String) userMap.get("login")).get();
-		String password = Optional.ofNullable((String) userMap.get("password")).get();
+		Optional<String> password = Optional.ofNullable((String) userMap.get("password"));
 		String role = Optional.ofNullable((String) userMap.get("role")).get();
 		JoatseUser user = JoatseUser.newLocalUser(login, true);
-		user.setPassword(PasswordEncoderFactories.createDelegatingPasswordEncoder().encode(password));
+		password.ifPresent(p->user.setPassword(PasswordEncoderFactories.createDelegatingPasswordEncoder().encode(p)));
 		if (role.equals("ADMIN")) {
 			user.addAuthority(new SimpleGrantedAuthority("ROLE_JOATSE_ADMIN"));
 		}

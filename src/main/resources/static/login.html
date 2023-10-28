@@ -45,7 +45,7 @@
 		<table class="table table-striped">
 			<tbody>
 				<tr v-for="(value, key) in options.oauth2Registrations">
-					<td><a :href="'' + value" class="btn btn-lg btn-primary btn-block">{{key}}</a></td>
+					<td :id="'oauth-parent-'+key"><a :href="'' + value.oauthLoginUrl" class="btn btn-lg btn-primary btn-block" :id="'oauth-link-'+key">{{key}}</a></td>
 				</tr>
 			</tbody>
 		</table>
@@ -103,8 +103,55 @@ new Vue({
 		async created() {
 	        await fetch('/loginForm/options').then(response => response.json())
         			.then((data) => this.options = data);
-			this.loggedOut = new URLSearchParams(window.location.search).has('logout');
+			const loggedOut = new URLSearchParams(window.location.search).has('logout');
+			this.loggedOut = loggedOut;
         	// console.log("data", {...this._data});
+        	if (this.options.oauth2Registrations?.Google) {
+	        	let s = document.createElement("script");
+	        	s.setAttribute("src", "https://accounts.google.com/gsi/client");
+	        	s.setAttribute("async", "true");
+	        	document.head.appendChild(s);
+	        	let clientId =  this.options.oauth2Registrations?.Google.clientId;
+	        	let oauthLoginUrl = new URL(this.options.oauth2Registrations?.Google.oauthLoginUrl, document.baseURI).href
+	        	s.onload = function () {
+					google.accounts.id.initialize({
+						client_id: clientId,
+						auto_select: !loggedOut,
+						callback: (data) => {
+							console.log(`Google login callback`, data.credential);
+							fetch('/loginPost/external-jwt',
+								{
+									method: 'POST',
+									body: data.credential,
+									headers: {
+										"Accept": "application/json"
+									}
+								}).then(response => response.json())
+								.then((data) => {
+									console.log("Google login response", data);
+									if (data.jwt) {
+										window.location.assign("/postLogin");
+									} else {
+										console.error("Google login failed");
+									}
+								})
+								.catch(e => console.error("Google login error", e));
+						}
+					});
+					if (loggedOut) {
+						google.accounts.id.disableAutoSelect();
+					}
+					google.accounts.id.prompt((notification) => {
+						console.log("Google login prompt", notification);
+						if (notification.isNotDisplayed() || notification.isSkippedMoment()) {
+							// continue with another identity provider.
+						}
+					});
+					let parent = document.getElementById("oauth-parent-Google");
+					let width = parent.clientWidth;
+					google.accounts.id.renderButton(parent, { theme: "filled_blue", size: "large", width: width });
+				};
+	        }        	
 		}
     });
 </script>

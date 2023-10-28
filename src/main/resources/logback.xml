@@ -19,6 +19,9 @@
 	
 	<logger name="org.eclipse.jetty.proxy.AsyncProxyServlet" level="INFO" />
 	
+	<logger name="org.springframework.security.web.FilterChainProxy" level="INFO" /><!-- Enable with TRACE -->
+	<logger name="org.springframework.web.servlet.DispatcherServlet" level="INFO" /><!-- Enable with TRACE -->
+	
     <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
         <file>joatse.log</file>
         <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">

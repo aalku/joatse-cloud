@@ -37,7 +37,7 @@ public class ListenPortConfigurator implements InitializingBean {
 	private ListenerConfigurationDetector webListenerConfiguration;
 
 	@Bean("openPortRange")
-	public PortRange openPortRange() throws Exception {
+	PortRange openPortRange() throws Exception {
 		PortRange openPortRange = new PortRange();
 		openPortRange.setup(openPortRangeString, "cloud.port.open.range",
 				Collections.singletonMap(webListenerConfiguration.getServerPort(), "server.port"),
@@ -46,7 +46,7 @@ public class ListenPortConfigurator implements InitializingBean {
 	}
 	
 	@Bean("httpPortRange")
-	public PortRange httpPortRange(@Autowired @Qualifier("openPortRange") PortRange openPortRange) throws Exception {
+	PortRange httpPortRange(@Autowired @Qualifier("openPortRange") PortRange openPortRange) throws Exception {
 
 		Map<PortRange, String> forbidenRanges = new LinkedHashMap<>();
 		forbidenRanges.put(openPortRange, "cloud.port.open.range");
@@ -58,7 +58,7 @@ public class ListenPortConfigurator implements InitializingBean {
 	}
 	
 	@Bean("httpUnsafePortRange")
-	public PortRange httpUnsafePortRange(@Autowired @Qualifier("openPortRange") PortRange openPortRange,
+	PortRange httpUnsafePortRange(@Autowired @Qualifier("openPortRange") PortRange openPortRange,
 			@Autowired @Qualifier("httpPortRange") PortRange httpPortRange) throws Exception {
 
 		Map<PortRange, String> forbidenRanges = new LinkedHashMap<>();
@@ -72,12 +72,12 @@ public class ListenPortConfigurator implements InitializingBean {
 	}
 	
 	@Bean("switchboardPortListener")
-	public AsyncTcpPortListener<Void> switchboardPortListener() {
+	AsyncTcpPortListener<Void> switchboardPortListener() {
 		return new AsyncTcpPortListener<Void>(InetAddress.getLoopbackAddress(), 0);
 	}
 
 	@Bean("httpHosts")
-	public Set<String> httpHosts() {
+	Set<String> httpHosts() {
 		return httpHosts;
 	}
 

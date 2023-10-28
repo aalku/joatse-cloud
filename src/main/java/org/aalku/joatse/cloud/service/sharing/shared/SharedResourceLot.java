@@ -103,7 +103,7 @@ public class SharedResourceLot {
 	}
 	
 	private void addHttpItem(TunnelRequestHttpItem r) {
-		httpItems.add(new HttpTunnel(this, r.targetId, r.targetDescription, r.targetUrl, r.unsafe));
+		httpItems.add(new HttpTunnel(this, r.targetId, r.targetDescription, r.getTargetUrl(), r.isUnsafe(), r.getListenHostname()));
 	}
 
 	public TcpTunnel getTcpItem(long targetId) {
@@ -153,7 +153,10 @@ public class SharedResourceLot {
 	public void selectHttpEndpoints(HttpEndpointGenerator httpEndpointGenerator) {
 		LinkedHashSet<ListenAddress> forbiddenAddresses = new LinkedHashSet<ListenAddress>();
 		httpItems.forEach(i->{
-			ListenAddress listenAddress = httpEndpointGenerator.generateListenAddress(i, forbiddenAddresses);
+			String askedCloudHostname = Optional.ofNullable(i.getListenAddress()).map(x -> x.getCloudHostname())
+					.orElse(null);
+			ListenAddress listenAddress = httpEndpointGenerator.generateListenAddress(i, forbiddenAddresses,
+					askedCloudHostname);
 			i.setListenAddress(listenAddress);
 			forbiddenAddresses.add(listenAddress);
 		});

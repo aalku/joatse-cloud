@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.nio.channels.AsynchronousSocketChannel;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.NoSuchElementException;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -348,5 +349,14 @@ public class JoatseWsHandler extends AbstractWebSocketHandler implements WebSock
 		};
 		pingPongThread.setDaemon(true);
 		pingPongThread.start();
+	}
+
+	public void closeSession(SharedResourceLot s, String reason) {
+		Optional<JWSSession> wss = wsSessionMap.values().stream().filter(x->x.getSharedResourceLot().getUuid().equals(s.getUuid())).findFirst();
+		if (wss.isEmpty()) {
+			throw new NoSuchElementException();
+		} else {
+			wss.get().close(reason);
+		}
 	}
 }

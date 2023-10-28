@@ -13,6 +13,7 @@ import java.net.InetAddress;
 import java.net.MalformedURLException;
 import java.net.URI;
 import java.net.URL;
+import java.net.URLEncoder;
 import java.net.UnknownHostException;
 import java.nio.CharBuffer;
 import java.nio.charset.Charset;
@@ -78,7 +79,9 @@ import org.springframework.beans.factory.InitializingBean;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
+import org.springframework.web.util.HtmlUtils;
 
 import jakarta.servlet.ServletException;
 import jakarta.servlet.ServletRequest;
@@ -102,7 +105,7 @@ public class HttpProxyManager implements InitializingBean, DisposableBean {
 
 	private static final Pattern PATTERN_URL_PREFFIX = Pattern.compile("(?<!\\w)http(s?)://[-\\w_.]+(:[0-9]+)?(?![-\\w_.])");
 	private static final Pattern PATTERN_CONTENT_TYPE_TEXT = Pattern.compile("^(text/.*|application/manifest[+]json.*|application/json.*|application/javascript.*)$");
-
+	
 	public static class UrlRewriteConfig {
 		Map<String, String> urlRewriteMap = Collections.synchronizedMap(new LinkedHashMap<>());
 		Map<String, String> urlReverseRewriteMap = Collections.synchronizedMap(new LinkedHashMap<>());
@@ -150,13 +153,54 @@ public class HttpProxyManager implements InitializingBean, DisposableBean {
 				} else {
 					log.warn("Request {} {} rejected", httpServletRequest.getMethod(),
 							httpServletRequest.getRequestURL());
-					((HttpServletResponse) response).sendError(404, "Unknown resource requested");
-					throw new RuntimeException("Can't find tunnel matching");
+					// ((HttpServletResponse) response).sendError(404, "Unknown resource requested");
+					HttpServletResponse hsr = (HttpServletResponse) response;
+					try (PrintWriter pw = new PrintWriter(hsr.getOutputStream())) {
+						hsr.setStatus(404);
+						
+						StringBuilder loginUrl = getPublicCloudUrl();
+						String requestUrl = getRequestUrl(httpServletRequest);
+						List<MediaType> accepted = MediaType.parseMediaTypes(httpServletRequest.getHeader("Accept"));						
+						if (accepted.contains(MediaType.TEXT_HTML)) {
+						hsr.setContentType("text/html;charset=UTF-8");
+							pw.println("<html><head><title>511 Network Authentication Required</title>");
+							pw.println("<script>");
+							pw.println("</script>");
+							pw.println("</head><body>");
+							pw.print("<h1>511 Network Authentication Required</h1>");
+							
+							pw.print("<p>Can't find tunnel matching <span id='requested-url'>" + HtmlUtils.htmlEscape(requestUrl)
+									+ "</span> allowed to be used from your IP address "
+									+ HtmlUtils.htmlEscape(remoteAddress.getHostAddress()) + "</p>");
+							
+							pw.print("<p>You might want to log in at <a href='"
+									+ HtmlUtils.htmlEscape(new StringBuilder(loginUrl).append("?triedToAccessHttp=" + URLEncoder.encode(requestUrl, "utf-8")).toString()) + "'>"
+									+ HtmlUtils.htmlEscape(loginUrl.toString()) + "</a></p>");
+							
+							pw.print("</body></html>");
+						} else {
+							hsr.sendError(511);
+						}
+					}
+					// throw new RuntimeException("Can't find tunnel matching");
 				}
 			} catch (Exception e) {
 				log.error("Error " + request, e);
 				throw new RuntimeException(e);
 			}
+		}
+
+		private StringBuilder getPublicCloudUrl() {
+			StringBuilder loginUrlSB = new StringBuilder();
+			if (webListenerConfigurationDetector.getSslRequired()) {
+				loginUrlSB.append("https://");
+			} else {
+				loginUrlSB.append("http://");
+			}						
+			loginUrlSB.append(webListenerConfigurationDetector.getPublicHostname());
+			loginUrlSB.append(":").append(webListenerConfigurationDetector.getServerPort());
+			loginUrlSB.append("/");
+			return loginUrlSB;
 		}
 
 		@Override
@@ -233,11 +277,8 @@ public class HttpProxyManager implements InitializingBean, DisposableBean {
 			if (!validateDestination(clientRequest.getServerName(), clientRequest.getServerPort()))
 				return null;
 			try {
-				StringBuffer sbuff = clientRequest.getRequestURL();
-		        String query = clientRequest.getQueryString();
-		        if (query != null)
-		        	sbuff.append("?").append(query);
-				URL clientURL = new URL(sbuff.toString());
+				String urlString = getRequestUrl(clientRequest);
+				URL clientURL = new URL(urlString);
 
 				HttpTunnel tunnel = (HttpTunnel) clientRequest.getAttribute(REQUEST_KEY_HTTPTUNNEL);
 				String targetUrl = rewriteUrl(clientURL, tunnel);
@@ -578,4 +619,14 @@ public class HttpProxyManager implements InitializingBean, DisposableBean {
 		return context.entrySet().stream().map(e -> String.format("  %s:\t%s", e.getKey(), e.getValue()))
 				.collect(Collectors.joining(",\r\n"));
 	}
+
+	private static String getRequestUrl(HttpServletRequest clientRequest) {
+		StringBuffer sbuff = clientRequest.getRequestURL();
+		String query = clientRequest.getQueryString();
+		if (query != null)
+			sbuff.append("?").append(query);
+		String urlString = sbuff.toString();
+		return urlString;
+	}
+
 }

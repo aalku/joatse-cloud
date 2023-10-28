@@ -33,7 +33,18 @@
 			<div class="accordion" role="tablist">
 				<b-card no-body class="mb-1" v-for="(s, iS) in sessions.sessions" :key="s.uuid">
 					<b-card-header header-tag="header" class="p-1" role="tab">
-						<b-button block v-b-toggle.accordion-1 variant="outline-primary">Session from {{s.requesterAddress}} created at {{s.creationTime}}</b-button>
+						<b-container fluid>
+							<div class="btn-group d-flex" role="group">
+								<b-button v-b-toggle.accordion-1 variant="outline-primary">
+									Session from {{s.requesterAddress}} created at {{s.creationTime}}
+								</b-button>
+								<b-button variant="outline-primary" disabled>Bandwith:
+											{{s.bandwithInKbps.toFixed(2)}}/{{s.bandwithOutKbps.toFixed(2)}} Kbps</b-button>
+								<b-button variant="outline-primary" @click="disconnectSession(s)">
+									<b-icon-telephone-x />
+								</b-button>
+							</div>
+						</b-container>						
 					</b-card-header>
 					<b-collapse id="accordion-1" accordion="session-accordion" role="tabpanel">
 						<b-card-body>
@@ -137,9 +148,9 @@
 			<div class="accordion" role="tablist">
 				<b-card no-body class="mb-1" v-for="(ps, iPS) in sessions.preconfirmedShares.filter(x=>!x.onLiveSession)" :key="ps.uuid">
 					<b-card-header header-tag="header" class="p-1" role="tab">
-						<b-button block v-b-toggle.accordion-1 variant="outline-primary">Preconfirmed share {{ps.uuid}}</b-button>
+						<b-button block v-b-toggle.accordion-2 variant="outline-primary">Preconfirmed share {{ps.uuid}}</b-button>
 					</b-card-header>
-					<b-collapse id="accordion-1" accordion="session-accordion" role="tabpanel">
+					<b-collapse id="accordion-2" accordion="preconfirmed-accordion" role="tabpanel">
 						<b-card-body>
 							<b-container fluid>
 								<b-row v-for="(t, it) in ps.tcpTunnels" :key="t.targetId">

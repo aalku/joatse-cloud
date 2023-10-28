@@ -7,6 +7,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
+import org.aalku.joatse.cloud.tools.io.BandwithCalculator.OneWayBandwithCalculator;
 import org.aalku.joatse.cloud.tools.io.BandwithLimiter.Pause;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
@@ -20,20 +21,32 @@ public class BandwithLimiterTest {
 	@Test
 	void fistTest() throws InterruptedException {
 		log.info("// fistTest, several windows");
+		OneWayBandwithCalculator bwCalc = new OneWayBandwithCalculator();
 		ScheduledExecutorService exec = Executors.newScheduledThreadPool(2);
 		BandwithLimiter x = new BandwithLimiter();
 		int prec = 100;
 		int seconds = 5;
 		int objectiveBps = 100000;
+		int overloadBps = objectiveBps * 125 / 100;
 		//
 		long t0 = System.nanoTime();
+		x.setLimitBps((long)objectiveBps);
 		AtomicLong bytes = new AtomicLong(0L);
 		try {
 			exec.scheduleAtFixedRate(()->{
-				int b = objectiveBps / 8 / (1000 / prec);
+				int b = overloadBps / 8 / (1000 / prec);
 				bytes.addAndGet(b);
-				x.next(b);
+				Pause pause = x.next(b); // request permission to send
+				try {
+					pause.sleep(); // sleep what the doctor said
+				} catch (IOException e) {
+					Assertions.fail(e);
+				}
+				bwCalc.reportPacket(b);
 			}, 0, 1000 / prec, TimeUnit.MILLISECONDS);
+			exec.scheduleAtFixedRate(()->{
+				log.info("BW={} bps", bwCalc.getTraffic().getBps());
+			}, 0, 1000, TimeUnit.MILLISECONDS);
 			Thread.sleep(TimeUnit.SECONDS.toMillis(seconds + 1));
 		} finally {
 			exec.shutdownNow();

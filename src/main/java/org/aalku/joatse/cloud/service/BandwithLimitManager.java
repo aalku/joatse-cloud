@@ -23,7 +23,7 @@ public class BandwithLimitManager implements InitializingBean {
 	@Value("${cloud.bandwith.limit.global.bps:4096000}")
 	private Long globalBandwithLimit;
 	
-	@Value("${cloud.bandwith.limit.pause.max.millis:500}")
+	@Value("${cloud.bandwith.limit.pause.max.millis:100}")
 	private long maxPauseMillis;
 
 	private BandwithLimiter globalLimiter = new BandwithLimiter();

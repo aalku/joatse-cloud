@@ -14,8 +14,10 @@ const App = {
     computed: {
 	},
     methods: {
-		openHttpTunnel(s, h) {
+		async openHttpTunnel(s, h) {
+			await this.allowMyIP(s, false);
 			window.open(h.listenUrl, "_blank");
+			await this.loadData();
 			return false;
 		},
 		async loadData() {
@@ -123,7 +125,7 @@ const App = {
 			this.loadData();
 			console.log("Result", res, body, error);
 		},
-		async allowMyIP(s) {
+		async allowMyIP(s, reload=true) {
 			console.log("Saving data...", s);
 			let o = { session: s.uuid };
 			let res = null;
@@ -141,14 +143,39 @@ const App = {
 			} catch (e) {
 				error = e;
 			}
-			this.loadData();
+			if (reload) {
+				await this.loadData();
+			}
 			console.log("Result", res, body, error);
 		},
 		copyToClipboard(string, variable) {
 			navigator.clipboard.writeText(string);
 			this[variable]=true;
 			setInterval(()=>this[variable]=false, 1000);
-		}
+		},
+		async disconnectSession(s, reload=true) {
+			console.log("Sending data...", s);
+			let o = { session: s.uuid };
+			let res = null;
+			let body = null;
+			let error = null;
+			try {
+				res = await fetch('/sessions', {
+					method: 'DELETE',
+					headers: {
+						'Content-type': 'application/json; charset=UTF-8',
+					},
+					body: JSON.stringify(o)
+				});
+				body = await res.json();
+			} catch (e) {
+				error = e;
+			}
+			if (reload) {
+				await this.loadData();
+			}
+			console.log("Result", res, body, error);
+		},
     },
 	async created() {
 		await $('.collapse.last').collapse('show');

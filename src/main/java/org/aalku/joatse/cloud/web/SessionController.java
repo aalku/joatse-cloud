@@ -12,13 +12,14 @@ import java.util.UUID;
 import java.util.stream.Collectors;
 
 import org.aalku.joatse.cloud.config.ListenerConfigurationDetector;
+import org.aalku.joatse.cloud.service.JWSSession;
+import org.aalku.joatse.cloud.service.JoatseWsHandler;
 import org.aalku.joatse.cloud.service.sharing.http.HttpTunnel;
 import org.aalku.joatse.cloud.service.sharing.shared.SharedResourceLot;
 import org.aalku.joatse.cloud.service.sharing.shared.TcpTunnel;
-import org.aalku.joatse.cloud.service.JWSSession;
-import org.aalku.joatse.cloud.service.JoatseWsHandler;
 import org.aalku.joatse.cloud.service.user.UserManager;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -87,7 +88,8 @@ public class SessionController {
 			InetAddress remoteAddress = getRemoteAddress(request);
 			boolean allowed = t.getAllowedAddresses().contains(remoteAddress);
 			m.put("addressIsAllowed", allowed);
-			
+			m.put("bandwithInKbps", s.getTrafficIn().getBps() / 1024.0);
+			m.put("bandwithOutKbps", s.getTrafficOut().getBps() / 1024.0);
 			Collection<TcpTunnel> tcpItems = t.getTcpItems();
 			List<Map<String, Object>> atcp = new ArrayList<>(tcpItems.size());
 			if (!tcpItems.isEmpty()) {
@@ -119,6 +121,21 @@ public class SessionController {
 			m.put("httpItems", ahttp);
 			return m;
 		}).collect(Collectors.toList()));
+		return res;
+	}
+
+	
+	@DeleteMapping("/sessions")
+	@ResponseBody
+	public Map<String, Object> closeSession(@RequestBody Map<String, Object> payload) {
+		Map<String, Object> res = new LinkedHashMap<>();
+		UUID uuid = Optional.ofNullable((String) payload.get("session")).map(u->UUID.fromString(u)).get();
+		Optional<SharedResourceLot> s = getSession(uuid);
+		if (s.isPresent()) {
+			wsHandler.closeSession(s.get(), "Close requested by user through http controller");
+		} else {
+			throw new RuntimeException("Unknown session");
+		}
 		return res;
 	}
 

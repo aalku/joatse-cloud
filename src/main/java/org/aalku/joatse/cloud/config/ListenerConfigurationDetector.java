@@ -21,6 +21,9 @@ public class ListenerConfigurationDetector implements InitializingBean {
 	@Value("${server.hostname.public:}")
 	private String publicHostname;
 
+	/**
+	 * publicHostname was get automatically because no manual publicHostname selected
+	 */
 	private boolean autoHostname;
 	
 	@Override
