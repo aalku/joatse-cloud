@@ -416,4 +416,9 @@ public class SharingManager implements InitializingBean, DisposableBean {
 			return null;
 		}
 	}
+
+	public HttpTunnel getHttpTunnelById(UUID uuid, long httpTunnelId) {
+		HttpTunnel res = tunnelRegistry.getHttpTunnel(uuid, httpTunnelId);
+		return res;
+	}
 }

@@ -14,10 +14,13 @@
 	<logger name="org.aalku.joatse" level="DEBUG" />
 	<logger name="org.aalku.joatse.cloud.proxy.jetty" level="DEBUG" />
 	<logger name="org.aalku.joatse.cloud.tools.io.BandwithLimiter" level="INFO" />
-	
+	<logger name="org.aalku.joatse.cloud.web.jwt.JoatseTokenManager" level="INFO" />
 	<logger name="org.eclipse.jetty.io" level="INFO" />
 	
 	<logger name="org.eclipse.jetty.proxy.AsyncProxyServlet" level="INFO" />
+	<logger name="org.eclipse.jetty.websocket.core.internal.WebSocketCoreSession" level="WARN" />
+	<logger name="org.eclipse.jetty.client.HttpDestination" level="WARN" />
+	<logger name="org.eclipse.jetty.websocket.core.client" level="WARN" />
 	
 	<logger name="org.springframework.security.web.FilterChainProxy" level="INFO" /><!-- Enable with TRACE -->
 	<logger name="org.springframework.web.servlet.DispatcherServlet" level="INFO" /><!-- Enable with TRACE -->

@@ -57,6 +57,9 @@ public class SwitchboardConnection extends AbstractConnection {
 	@Override
 	public void onOpen() {							
 		HttpTunnel tunnel = (HttpTunnel) destination.getOrigin().getTag();
+		if (tunnel == null) {
+			log.error("HttpTunnel is not tagged");
+		}
 		UUID uuid = tunnel.getTunnel().getUuid();
 		log.info("onOpen. HttpTunnel= {} --> {}", uuid, tunnel.getTargetURL().toString());
 		super.onOpen();

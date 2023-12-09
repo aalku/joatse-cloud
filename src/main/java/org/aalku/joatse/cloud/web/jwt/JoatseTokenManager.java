@@ -51,7 +51,7 @@ public class JoatseTokenManager implements TokenVerifier, InitializingBean {
 	public Map<String, Object> verifyToken(String token) {
 		try {
 			Claims claims = (Claims)parser.parse(token).getBody();
-			log.info("Verified token {}", claims);
+			log.debug("Verified token {}", claims);
 			return claims;
 		} catch (SignatureException | ExpiredJwtException | MalformedJwtException | IllegalArgumentException | ClassCastException e) {
 			log.warn("Invalid token: " + token);

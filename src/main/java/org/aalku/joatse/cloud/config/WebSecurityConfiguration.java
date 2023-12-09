@@ -72,6 +72,7 @@ public class WebSecurityConfiguration {
                 .addFilterBefore(jwtAuthorizationFilter, UsernamePasswordAuthenticationFilter.class)
                 .authorizeHttpRequests(t -> t.requestMatchers(WebSocketConfig.CONNECTION_HTTP_PATH).anonymous()
 				//
+                .requestMatchers(HttpMethod.GET, "/ws-test.html").permitAll()
                 .requestMatchers(HttpMethod.GET, "/login.html", "/css/**", "/header.js", "/lib/*.js").permitAll()
 				.requestMatchers(HttpMethod.GET, "/user").permitAll()
 				.requestMatchers("/error").permitAll()

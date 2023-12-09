@@ -9,9 +9,11 @@ import java.io.OutputStream;
 import java.io.OutputStreamWriter;
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.lang.ref.WeakReference;
 import java.net.InetAddress;
 import java.net.MalformedURLException;
 import java.net.URI;
+import java.net.URISyntaxException;
 import java.net.URL;
 import java.net.URLEncoder;
 import java.net.UnknownHostException;
@@ -27,7 +29,16 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -51,6 +62,7 @@ import org.eclipse.jetty.client.ProxyConfiguration.Proxy;
 import org.eclipse.jetty.client.SwitchboardConnection;
 import org.eclipse.jetty.client.api.Request;
 import org.eclipse.jetty.client.api.Response;
+import org.eclipse.jetty.client.http.HttpClientTransportOverHTTP;
 import org.eclipse.jetty.http.HttpField;
 import org.eclipse.jetty.http.HttpFields;
 import org.eclipse.jetty.http.HttpVersion;
@@ -72,6 +84,15 @@ import org.eclipse.jetty.servlet.ServletHolder;
 import org.eclipse.jetty.util.Promise;
 import org.eclipse.jetty.util.URIUtil;
 import org.eclipse.jetty.util.ssl.SslContextFactory;
+import org.eclipse.jetty.websocket.api.Session;
+import org.eclipse.jetty.websocket.api.WebSocketListener;
+import org.eclipse.jetty.websocket.api.exceptions.CloseException;
+import org.eclipse.jetty.websocket.api.exceptions.UpgradeException;
+import org.eclipse.jetty.websocket.client.ClientUpgradeRequest;
+import org.eclipse.jetty.websocket.client.WebSocketClient;
+import org.eclipse.jetty.websocket.core.server.WebSocketServerComponents;
+import org.eclipse.jetty.websocket.server.JettyWebSocketServerContainer;
+import org.eclipse.jetty.websocket.server.config.JettyWebSocketServletContainerInitializer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.DisposableBean;
@@ -83,6 +104,7 @@ import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.util.HtmlUtils;
 
+import jakarta.servlet.ServletContext;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.ServletRequest;
 import jakarta.servlet.ServletResponse;
@@ -93,12 +115,122 @@ import jakarta.servlet.http.HttpServletResponse;
 @Component
 public class HttpProxyManager implements InitializingBean, DisposableBean {
 
+	private CopyOnWriteArrayList<WeakReference<WebSocketClient>> wsClients = new CopyOnWriteArrayList<>();
+	private ScheduledExecutorService scheduler;
+	
+	public class ServerSideWsHandler implements WebSocketListener {
+		private CompletableFuture<Session> cfOnConnect = new CompletableFuture<>();
+		private CompletableFuture<Void> cfOnClose = new CompletableFuture<>();
+		private Consumer<String> textMessageHandler;
+		private Consumer<byte[]> binaryMessageHandler;
+		@Override
+		public void onWebSocketConnect(Session session) {
+			log.info(String.format("S onWebSocketConnect: %s", session.getUpgradeRequest().getRequestURI()));
+			cfOnConnect.complete(session);
+		}
+		@Override
+		public void onWebSocketClose(int statusCode, String reason) {
+			log.info(String.format("S onWebSocketClose: %s, %s", statusCode, reason));
+			cfOnClose.complete(null);
+		}
+		@Override
+		public void onWebSocketError(Throwable cause) {
+			log.info(String.format("S onWebSocketError: %s", cause));
+			cfOnConnect.completeExceptionally(cause);
+		}
+		@Override
+		public void onWebSocketText(String message) {
+			log.info(String.format("S onWebSocketText: %s", message));
+			textMessageHandler.accept(message);
+		}
+		@Override
+		public void onWebSocketBinary(byte[] payload, int offset, int len) {
+			log.info(String.format("S onWebSocketBinary"));
+			byte[] m = new byte[len];
+			System.arraycopy(payload, offset, m, 0, len);
+			binaryMessageHandler.accept(m);
+		}
+		public void setTextMessageHandler(Consumer<String> textMessageHandler) {
+			this.textMessageHandler = textMessageHandler;
+		}
+		public void setBinaryMessageHandler(Consumer<byte[]> binaryMessageHandler) {
+			this.binaryMessageHandler = binaryMessageHandler;
+		}
+		public void setCloseHandler(Runnable task) {
+			cfOnClose.thenRun(task);
+		}
+		public CompletableFuture<Session> getSession() {
+			return cfOnConnect;
+		}
+	}
+	
+	public class ClientSideWsHandler implements WebSocketListener {
+		private CompletableFuture<Session> cfOnConnect = new CompletableFuture<>();
+		private CompletableFuture<Void> cfOnClose = new CompletableFuture<>();
+		private Consumer<String> textMessageHandler;
+		private Consumer<byte[]> binaryMessageHandler;
+		private CompletableFuture<Integer> cfErrorCode = new CompletableFuture<>();
+		public ClientSideWsHandler() {
+		}
+		@Override
+		public void onWebSocketConnect(Session session) {
+			log.info(String.format("C onWebSocketConnect: %s", session.getUpgradeRequest().getRequestURI()));
+			cfOnConnect.complete(session);
+		}
+		@Override
+		public void onWebSocketClose(int statusCode, String reason) {
+			log.info(String.format("C onWebSocketClose: %s, %s", statusCode, reason));
+			cfOnClose.complete(null);
+		}
+		@Override
+		public void onWebSocketError(Throwable cause) {
+			log.info(String.format("C onWebSocketError: %s", cause));
+			
+			if (cause instanceof UpgradeException) {
+				cfErrorCode.complete(((UpgradeException) cause).getResponseStatusCode());
+			} else if (cause instanceof CloseException) {
+				cfErrorCode.complete(((CloseException) cause).getStatusCode());
+			}
+			cfOnConnect.completeExceptionally(cause);
+		}
+		@Override
+		public void onWebSocketText(String message) {
+			log.info(String.format("C onWebSocketText: %s", message));
+			textMessageHandler.accept(message);
+		}
+		@Override
+		public void onWebSocketBinary(byte[] payload, int offset, int len) {
+			log.info(String.format("C onWebSocketBinary"));
+			byte[] m = new byte[len];
+			System.arraycopy(payload, offset, m, 0, len);
+			binaryMessageHandler.accept(m);
+		}
+		public void setTextMessageHandler(Consumer<String> textMessageHandler) {
+			this.textMessageHandler = textMessageHandler;
+		}
+		public void setBinaryMessageHandler(Consumer<byte[]> binaryMessageHandler) {
+			this.binaryMessageHandler = binaryMessageHandler;
+		}
+		public void setCloseHandler(Runnable task) {
+			cfOnClose.thenRun(task);
+		}
+		public CompletableFuture<Session> getSession() {
+			return cfOnConnect;
+		}
+		public Future<Integer> getErrorCode() {
+			return cfErrorCode;
+		}
+	}
+
+
 	private static final String COOKIE_JOATSE_HTTP_TUNNEL_TARGET_ID = "JoatseHttpTunnelTargetId";
 
 	private static final String REQUEST_KEY_HTTPTUNNEL = "httpTunnel";
 	private static final String REQUEST_KEY_REWRITE_HEADERS = "rewriteHeaders";
 	private static final String REQUEST_KEY_HIDE_PROXY = "hideProxy";
 	private static final String REQUEST_KEY_JOATSE_CLEAR_COOKIES = "JOATSE_CLEAR_COOKIES";
+	
+	private static final String REQUEST_PROXY_HEADER_HTTPTUNNEL = "joatse-header-httptunnel-" + System.currentTimeMillis();
 
 	protected static final Set<String> REVERSE_PROXY_HEADERS = new LinkedHashSet<>(
 			Arrays.asList("Location", "Content-Location", "URI"));
@@ -114,9 +246,20 @@ public class HttpProxyManager implements InitializingBean, DisposableBean {
 	private final class AsyncMiddleManServletExtension extends AsyncMiddleManServlet {
 		private static final long serialVersionUID = 1L;
 		private boolean unsafeHttpClient;
+//		private WebSocketComponents wsComponents;
+//		private WebSocketMappings wsMapping;
 
 		public AsyncMiddleManServletExtension(boolean unsafeHttpClient) {
 			this.unsafeHttpClient = unsafeHttpClient;
+		}
+		
+		@Override
+		public void init() throws ServletException {
+			super.init();
+            ServletContext servletContext = getServletContext();
+//            wsComponents = 
+            WebSocketServerComponents.getWebSocketComponents(servletContext);
+//            wsMapping = new WebSocketMappings(wsComponents);
 		}
 
 		@Override
@@ -126,19 +269,128 @@ public class HttpProxyManager implements InitializingBean, DisposableBean {
 
 		@Override
 		protected HttpClient newHttpClient(ClientConnector clientConnector) {
-			HttpClient client = super.newHttpClient(clientConnector);
+	        HttpClient client = new HttpClient(new HttpClientTransportOverHTTP(clientConnector) {
+	        	@Override
+	        	public Origin newOrigin(HttpRequest request) {
+	        		request.headers(h->{
+	        			String ht = h.get(REQUEST_PROXY_HEADER_HTTPTUNNEL);
+	        			if (ht != null) {
+	        				h.remove(REQUEST_PROXY_HEADER_HTTPTUNNEL);
+	        				if (request.getTag() == null) {
+	        					HttpTunnel tunnel = tunnelFromHeader(ht);
+	        					request.tag(tunnel);
+	        				}
+	        			}
+	        		});
+	        		Origin origin = super.newOrigin(request);
+					return origin;
+	        	}
+	        });
 			client.getSslContextFactory().setTrustAll(unsafeHttpClient);
-			client.getProxyConfiguration().getProxies()
-					.add(new JoatseProxy(
+			client.getProxyConfiguration().addProxy(new JoatseProxy(
 							new Origin.Address("localhost", switchboardPortListener.getAddress().getPort()), false,
 							null, null));
 			return client;
 		}
 
+		private HttpTunnel tunnelFromHeader(String headerValue) {
+			String[] a = headerValue.split(":");
+			UUID uuid = UUID.fromString(a[0]);
+			long id = Long.parseLong(a[1], 16);
+			HttpTunnel httpTunnelById = sharingManager.getHttpTunnelById(uuid, id);
+			return httpTunnelById;
+		}
+		
 		@Override
 		public void service(ServletRequest request, ServletResponse response) throws ServletException, IOException {
 			try {
-				InetAddress remoteAddress = InetAddress.getByName(request.getRemoteAddr());
+				HttpServletRequest servletRequest = (HttpServletRequest) request;
+				HttpServletResponse servletResponse = (HttpServletResponse) response;
+				ServletContext servletContext = servletRequest.getServletContext();
+
+				if (Optional.ofNullable(servletRequest.getHeader("Upgrade")).filter(x->x.equals("websocket")).isPresent()) {
+
+			        InetAddress remoteAddress = InetAddress.getByName(request.getRemoteAddr());
+					int serverPort = request.getServerPort();
+					String serverName = request.getServerName();
+					String scheme = request.getScheme();
+					HttpTunnel httpTunnel = sharingManager.getTunnelForHttpRequest(remoteAddress, serverPort, serverName, scheme);
+					
+					if (httpTunnel == null) {
+						servletResponse.sendError(404);
+						return;
+					}
+					
+					JettyWebSocketServerContainer container = JettyWebSocketServerContainer
+							.getContainer(servletContext);
+					
+					URI mappedUri = setWebSocketScheme(new URI(rewriteUrl(new URL(servletRequest.getRequestURL().toString()), httpTunnel)));
+
+					log.debug(String.format("WebSockets proxy connection to %s", mappedUri));
+					ClientUpgradeRequest clientUpgradeRequest = newProxyClientUpgradeRequest(servletRequest, httpTunnel);
+					WebSocketClient client = newWsClient();
+					
+					ServerSideWsHandler serverSideWsHandler = new ServerSideWsHandler();
+					ClientSideWsHandler clientSideHandler = new ClientSideWsHandler();
+					serverSideWsHandler.setCloseHandler(()->IOTools.runFailable(()->client.stop()));
+					clientSideHandler.getSession().thenAccept(s->{
+						serverSideWsHandler.setTextMessageHandler(m->{
+							try {
+								s.getRemote().sendString(m);
+							} catch (IOException e) {
+								// TODO Auto-generated catch block
+								e.printStackTrace();
+							}
+						});
+						// TODO
+					});
+					serverSideWsHandler.getSession().thenAccept(s->{
+						clientSideHandler.setTextMessageHandler(m->{
+							try {
+								s.getRemote().sendString(m);
+							} catch (IOException e) {
+								// TODO Auto-generated catch block
+								e.printStackTrace();
+							}
+						});
+						// TODO
+					});
+					
+					
+					CompletableFuture<Session> futureConnect = client.connect(clientSideHandler, mappedUri, clientUpgradeRequest);
+					boolean clientConnected = futureConnect.handle((s,e)->{
+							if (e != null) {
+								IOTools.runFailable(()->client.stop());
+								return false;
+							} else {
+								clientSideHandler.setCloseHandler(()->IOTools.runFailable(()->client.stop()));
+								return true;
+							}
+					}).get();
+					if (clientConnected) {
+						boolean ok = container.upgrade((upgradeRequest, upgradeResponse) -> {
+							return serverSideWsHandler;
+						}, servletRequest, servletResponse);
+						if (!ok) {
+							IOTools.runFailable(()->client.stop());
+							throw new IOException("Unable to upgrade WebSocket connection");
+						}
+					} else {
+						int errorCode;
+						try {
+							errorCode = clientSideHandler.getErrorCode().get(2, TimeUnit.SECONDS);
+						} catch (TimeoutException x) {
+							log.error("Error waiting for an error event on a failed WS connection");
+							errorCode = 500;
+						}
+						log.warn("Coudn't connect WS to server so we replicate the error code to the client: {}", errorCode);
+						servletResponse.sendError(errorCode);
+						return;
+					}
+					return;
+				}
+
+		        InetAddress remoteAddress = InetAddress.getByName(request.getRemoteAddr());
 				HttpServletRequest httpServletRequest = (HttpServletRequest) request;
 				int serverPort = request.getServerPort();
 				String serverName = request.getServerName();
@@ -190,6 +442,29 @@ public class HttpProxyManager implements InitializingBean, DisposableBean {
 			}
 		}
 
+		private WebSocketClient newWsClient() throws ServletException {
+			WebSocketClient client = new WebSocketClient(newHttpClient());
+			wsClients.add(new WeakReference<WebSocketClient>(client));
+			try {
+				client.setStopAtShutdown(false); // <- Prevents GC
+				client.setConnectTimeout(10000);
+				client.setStopTimeout(5000);
+				client.start();
+			} catch (Exception e) {
+				throw new ServletException("Error starting WebSocket client", e);
+			}
+			return client;
+		}
+
+		private URI setWebSocketScheme(URI mappedUriA) throws URISyntaxException {
+			boolean isSecure = mappedUriA.getScheme().equals("https");
+			String schemeB = isSecure ? "wss" : "ws";
+			URI mappedUriB = new URI(schemeB,
+					mappedUriA.getSchemeSpecificPart(),
+					mappedUriA.getFragment());
+			return mappedUriB;
+		}
+
 		private StringBuilder getPublicCloudUrl() {
 			StringBuilder loginUrlSB = new StringBuilder();
 			if (webListenerConfigurationDetector.getSslRequired()) {
@@ -215,11 +490,52 @@ public class HttpProxyManager implements InitializingBean, DisposableBean {
 		protected HttpRequest newProxyRequest(HttpServletRequest request, String rewrittenTarget) {
 			HttpRequest proxyRequest = (HttpRequest) super.newProxyRequest(request, rewrittenTarget);
 			HttpTunnel hTunnel = (HttpTunnel) request.getAttribute(REQUEST_KEY_HTTPTUNNEL);
+			if (hTunnel == null) {
+				log.warn("request attribute REQUEST_KEY_HTTPTUNNEL is null");
+			}
 			if (hTunnel != null) {
 				proxyRequest.tag(hTunnel);
 			}
 			return proxyRequest;
 		}
+		
+		protected ClientUpgradeRequest newProxyClientUpgradeRequest(HttpServletRequest servletRequest, HttpTunnel hTunnel) {
+			ClientUpgradeRequest res = new ClientUpgradeRequest();
+			Map<String, List<String>> reqHeaders = Collections.list(servletRequest.getHeaderNames()).stream()
+					.collect(Collectors.toMap(k -> k, k -> Collections.list(servletRequest.getHeaders(k))));
+			// rewrite urls in headers
+			/*
+			 * Same algorithm as copyRequestHeaders, more or less
+			 */
+			reqHeaders.remove("Origin"); // Compatibility
+			reqHeaders.remove("Host"); // Compatibility
+			reqHeaders.keySet().removeIf(h->h.startsWith("Sec-WebSocket-")); // Compatibility
+			for (String fieldName: new ArrayList<>(reqHeaders.keySet())) {
+				boolean change = false;
+				List<String> oldList = reqHeaders.get(fieldName);
+				List<String> newList = new ArrayList<>(oldList.size());
+				for (String field: oldList) {
+					StringWriter out = new StringWriter();
+					CharBuffer buffer = CharBuffer.allocate(field.length());
+					buffer.put(field);
+					boolean match = IOTools.rewriteStringContent(buffer, new PrintWriter(out), true, PATTERN_URL_PREFFIX, hTunnel.getUrlReverseRewriteFunction());
+					change = change || match;
+					newList.add(out.toString());
+				}
+				if (change) { // replace all headers with that name if any change
+					log.debug("Changing header {} from {} to {}", fieldName, reqHeaders.get(fieldName), newList);
+					reqHeaders.put(fieldName, newList);
+				}
+			}
+			// Set them
+			log.debug("WS Headers = {}", reqHeaders);
+			res.setHeaders(reqHeaders);
+			// Trick so that the proxy ahead know where to send this request to
+			res.setHeader(REQUEST_PROXY_HEADER_HTTPTUNNEL,
+					hTunnel.getTunnel().getUuid() + ":" + Long.toHexString(hTunnel.getTargetId()));
+			return res;
+		}
+
 
 		@Override
 		protected void copyRequestHeaders(HttpServletRequest clientRequest, Request proxyRequest) {
@@ -227,6 +543,9 @@ public class HttpProxyManager implements InitializingBean, DisposableBean {
 			super.copyRequestHeaders(clientRequest, proxyRequest);
 			if ((boolean)clientRequest.getAttribute(REQUEST_KEY_REWRITE_HEADERS)) {
 				// rewrite urls in headers
+				/*
+				 * Same algorithm as newProxyClientUpgradeRequest, more or less
+				 */
 				proxyRequest.headers((HttpFields.Mutable m)->{
 					Set<String> fieldNames = m.getFieldNamesCollection();
 					for (String fieldName: fieldNames) {
@@ -392,7 +711,7 @@ public class HttpProxyManager implements InitializingBean, DisposableBean {
 				public boolean transform(Source source, Sink sink) throws IOException {
 					String contentType = proxyResponse.getContentType();
 					String contentEncoding = Optional.ofNullable(proxyResponse.getHeader("Content-Encoding")).orElse("identity");
-					if (Arrays.asList("identity", "gzip").contains(contentEncoding)
+					if (Arrays.asList("identity", "gzip").contains(contentEncoding) && contentType != null
 							&& PATTERN_CONTENT_TYPE_TEXT.matcher(contentType).matches()) {
 						log.info("transform.response {}: {}-->{} {} {}", 
 								tunnel.getUuid(),
@@ -463,12 +782,13 @@ public class HttpProxyManager implements InitializingBean, DisposableBean {
 			return new ClientConnectionFactory() {
 				@Override
 				public Connection newConnection(EndPoint endPoint, Map<String, Object> context) throws IOException {
-					log.debug("newConnection. EndPoint={}; Context=\r\n{};", endPoint, mapToString(context));
 					@SuppressWarnings("unchecked")
 					Promise<Connection> promise = (Promise<Connection>) context
 							.get(HttpClientTransport.HTTP_CONNECTION_PROMISE_CONTEXT_KEY);
 					HttpDestination destination = (HttpDestination) context
 							.get(HttpClientTransport.HTTP_DESTINATION_CONTEXT_KEY);
+					log.debug("newConnection. EndPoint={}; Context=\r\n{}; Destination=\r\n{}", endPoint,
+							mapToString(context), destination);
 					Executor executor = destination.getHttpClient().getExecutor();
 					SwitchboardConnection connection = new SwitchboardConnection(endPoint, executor, destination,
 							promise, connectionFactory, context);
@@ -513,6 +833,7 @@ public class HttpProxyManager implements InitializingBean, DisposableBean {
 
 	@Override
 	public void destroy() throws Exception {
+		scheduler.shutdownNow();
 		if (normalProxyServer != null) {
 			normalProxyServer.stop();
 		}
@@ -553,6 +874,22 @@ public class HttpProxyManager implements InitializingBean, DisposableBean {
 
 	@Override
 	public void afterPropertiesSet() throws Exception {
+		
+        scheduler = Executors.newScheduledThreadPool(2);
+        scheduler.scheduleWithFixedDelay(()->{
+        	if (log.isDebugEnabled()) {
+	        	StringBuilder sb = new StringBuilder();
+	        	String lf = String.format("%n\t");
+	        	for (WeakReference<WebSocketClient> c: wsClients) {
+					sb.append(Optional.ofNullable(c.get()).map(x -> x.getState()).orElse("-")).append(lf);
+	        	}
+	        	if (sb.length() > 0) {
+	        		log.debug("WebSocketClients: {}{}", lf, sb);
+	        	}
+        	}
+        	wsClients.removeIf(r->r.get() == null);
+        }, 5, 20, TimeUnit.SECONDS);
+		
 		this.normalProxyServer = buildProxyServer(httpPortRange, webListenerConfigurationDetector.isSslEnabled(), false);
 		this.unsafeClientProxyServer = buildProxyServer(httpUnsafePortRange, webListenerConfigurationDetector.isSslEnabled(), true);
 		this.normalProxyServer.start();
@@ -608,10 +945,37 @@ public class HttpProxyManager implements InitializingBean, DisposableBean {
 		return proxyHolder;
 	}
 
+//	private static class MyWebSocketListener implements WebSocketListener {
+//		@Override
+//		public void onWebSocketText(java.lang.String message) {
+//			System.out.println(message);
+//			WebSocketListener.super.onWebSocketText(message);
+//		}
+//		
+//		@Override
+//		public void onWebSocketBinary(byte[] payload, int offset, int len) {
+//			System.out.println("binaryMessage");
+//			WebSocketListener.super.onWebSocketBinary(payload, offset, len);
+//		}
+//	}
+	
 	private static ServletContextHandler servletContextHandler(AbstractProxyServlet servlet) {
 		final ServletContextHandler servletContextHandler = new ServletContextHandler();
 		servletContextHandler.setContextPath("/");
+//	    Servlet websocketServlet = new JettyWebSocketServlet() {
+//			private static final long serialVersionUID = 1L;
+//			@Override protected void configure(JettyWebSocketServletFactory factory) {
+//	            factory.addMapping("/", new JettyWebSocketCreator() {
+//					@Override
+//					public Object createWebSocket(JettyServerUpgradeRequest req, JettyServerUpgradeResponse resp) {
+//						return new MyWebSocketListener();
+//					}
+//				});
+//	        }
+//	    };
+//	    servletContextHandler.addServlet(new ServletHolder(websocketServlet), "ws://*");
 		servletContextHandler.addServlet(proxyHolder(servlet), "/*");
+		JettyWebSocketServletContainerInitializer.configure(servletContextHandler, null);
 		return servletContextHandler;
 	}
 
