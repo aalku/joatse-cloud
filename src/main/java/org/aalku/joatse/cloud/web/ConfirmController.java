@@ -36,6 +36,7 @@ public class ConfirmController {
 
 	public final static String CONFIRM_SESSION_KEY_HASH = "CONFIRM_SESSION_KEY_HASH";
 	
+	@SuppressWarnings("unused")
 	private Logger log = LoggerFactory.getLogger(ConfirmController.class);
 	
 	@Autowired

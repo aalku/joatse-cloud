@@ -32,4 +32,7 @@ public class TcpTunnel {
 	public void setListenPort(int listenPort) {
 		this.listenPort = listenPort;
 	}
+	public long getTargetId() {
+		return targetId;
+	}
 }

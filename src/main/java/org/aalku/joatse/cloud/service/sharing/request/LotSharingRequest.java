@@ -7,6 +7,7 @@ import java.net.URL;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.LinkedHashSet;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -21,14 +22,18 @@ public class LotSharingRequest {
 	private final InetSocketAddress requesterAddress;
 	private final Collection<TunnelRequestItem> items;
 	private final Instant creationTime;
-	public final CompletableFuture<TunnelCreationResult> future = new CompletableFuture<>();
-	private Set<InetAddress> allowedAddresses;
-	private UUID preconfirmedUuid;
+	private final CompletableFuture<TunnelCreationResult> future = new CompletableFuture<>();
+	private final Set<InetAddress> allowedAddresses;
+	private final UUID preconfirmedUuid;
+	private final boolean autoAuthorizeByHttpUrl;
 
-	public LotSharingRequest(InetSocketAddress connectionRequesterAddress, Collection<TunnelRequestItem> tunnelItems) {
+	public LotSharingRequest(InetSocketAddress connectionRequesterAddress, Collection<TunnelRequestItem> tunnelItems, boolean autoAuthorizeByHttpUrl, UUID preconfirmedUuid) {
 		this.requesterAddress = connectionRequesterAddress;
 		this.items = new ArrayList<>(tunnelItems);
 		this.creationTime = Instant.now();
+		this.allowedAddresses = new LinkedHashSet<>();
+		this.preconfirmedUuid = preconfirmedUuid;
+		this.autoAuthorizeByHttpUrl = autoAuthorizeByHttpUrl;
 	}
 
 	public InetSocketAddress getRequesterAddress() {
@@ -41,10 +46,6 @@ public class LotSharingRequest {
 
 	public CompletableFuture<TunnelCreationResult> getFuture() {
 		return future;
-	}
-
-	public void setAllowedAddresses(Set<InetAddress> allowedAddress) {
-		this.allowedAddresses = allowedAddress;
 	}
 
 	public UUID getUuid() {
@@ -89,10 +90,11 @@ public class LotSharingRequest {
 		Collection<TunnelRequestItem> items = new ArrayList<TunnelRequestItem>();
 		items.addAll(tcpTunnelReqs);
 		items.addAll(httpTunnelReqs);
-		LotSharingRequest lotSharingRequest = new LotSharingRequest(connectionRequesterAddress, items);
-		Optional.ofNullable(js.optString("preconfirmed")).filter(s->!s.isEmpty()).map(s->UUID.fromString(s)).ifPresent(uuid->{
-			lotSharingRequest.setPreconfirmedUuid(uuid);
-		});
+		
+		final UUID preconfirmedUuid = Optional.ofNullable(js.optString("preconfirmed")).filter(s->!s.isEmpty()).map(s->UUID.fromString(s)).orElse(null);
+		final boolean autoAuthorizeByHttpUrl = js.optBoolean("autoAuthorizeByHttpUrl", false);
+		LotSharingRequest lotSharingRequest = new LotSharingRequest(connectionRequesterAddress, items, autoAuthorizeByHttpUrl, preconfirmedUuid);
+
 		// TODO allowed addresses from json
 		return lotSharingRequest;
 	}
@@ -101,8 +103,13 @@ public class LotSharingRequest {
 		return preconfirmedUuid;
 	}
 
-	public void setPreconfirmedUuid(UUID preconfirmedUuid) {
-		this.preconfirmedUuid = preconfirmedUuid;
+	public boolean isAutoAuthorizeByHttpUrl() {
+		return autoAuthorizeByHttpUrl;
+	}
+
+	public void setAllowedAddresses(Set<InetAddress> set) {
+		allowedAddresses.addAll(set);
+		allowedAddresses.retainAll(set);
 	}
 
 

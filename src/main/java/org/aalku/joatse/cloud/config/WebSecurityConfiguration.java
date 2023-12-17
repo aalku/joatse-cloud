@@ -43,11 +43,12 @@ public class WebSecurityConfiguration {
 	public static final String PATH_LOGIN_POST = "/loginPost";
 	public static final String PATH_POST_LOGIN = "/postLogin";
 	public static final String PATH_PASSWORD_RESET = "/resetPassword";
+	public static final String PATH_PUBLIC = "/public/**";
 	
 	@SuppressWarnings("unused")
 	private Logger log = LoggerFactory.getLogger(WebSecurityConfiguration.class);
 	
-	@Bean
+	@Bean // Must be public
 	public ApplicationListener<WebServerInitializedEvent> webInitializedListener() {
 		return new ApplicationListener<WebServerInitializedEvent>() {
 			
@@ -72,7 +73,7 @@ public class WebSecurityConfiguration {
                 .addFilterBefore(jwtAuthorizationFilter, UsernamePasswordAuthenticationFilter.class)
                 .authorizeHttpRequests(t -> t.requestMatchers(WebSocketConfig.CONNECTION_HTTP_PATH).anonymous()
 				//
-                .requestMatchers(HttpMethod.GET, "/ws-test.html").permitAll()
+                .requestMatchers(HttpMethod.GET, PATH_PUBLIC).permitAll()
                 .requestMatchers(HttpMethod.GET, "/login.html", "/css/**", "/header.js", "/lib/*.js").permitAll()
 				.requestMatchers(HttpMethod.GET, "/user").permitAll()
 				.requestMatchers("/error").permitAll()

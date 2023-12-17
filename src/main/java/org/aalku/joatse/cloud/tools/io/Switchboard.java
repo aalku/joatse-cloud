@@ -60,7 +60,7 @@ public class Switchboard implements InitializingBean, DisposableBean, Consumer<E
 	private AsyncTcpPortListener<Void> switchboardPortListener;
 	
 	@Autowired
-	private SharingManager sharingManager; // TODO the tunnel will run through it.
+	private SharingManager sharingManager; // the tunnel will run through it.
 
 //	@Autowired
 //	private TunnelRegistry tunnelRegistry;
@@ -94,14 +94,14 @@ public class Switchboard implements InitializingBean, DisposableBean, Consumer<E
 			UUID uuid = new UUID(headerBuffer.getLong(), headerBuffer.getLong());
 			long targetId = headerBuffer.getLong();
 			
-			Object context = sharingManager.httpClientEndConnected(uuid, targetId);			
+			Object context = sharingManager.switchboardConnected(uuid, targetId);			
 			if (context != null) {
 				try {
 					IOTools.asyncWriteWholeBuffer(channel, ByteBuffer.wrap(new byte[] {0})) // send 0 = OK
 					.thenAccept(x -> {
 						try {
 							log.info("Switchboard proxy is ready: {}.{}", uuid, targetId);
-							sharingManager.httpClientEndConnectionReady(context, channel);
+							sharingManager.switchboardConnectionReady(context, channel);
 						} catch (Exception e1) {
 							reportErrorThenClose(channel, 2, e1.toString());
 						}

@@ -1,6 +1,7 @@
 package org.aalku.joatse.cloud.config;
 
 import java.net.InetAddress;
+import java.net.UnknownHostException;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -21,6 +22,7 @@ import org.springframework.context.annotation.Configuration;
 @Configuration
 public class ListenPortConfigurator implements InitializingBean {
 
+	
 	@Value("${cloud.port.open.range:}")
 	private String openPortRangeString;
 
@@ -73,7 +75,11 @@ public class ListenPortConfigurator implements InitializingBean {
 	
 	@Bean("switchboardPortListener")
 	AsyncTcpPortListener<Void> switchboardPortListener() {
-		return new AsyncTcpPortListener<Void>(InetAddress.getLoopbackAddress(), 0);
+		try {
+			return new AsyncTcpPortListener<Void>(InetAddress.getByName(System.getProperty("switchboard.host", "localhost")), Integer.getInteger("switchboard.port", 0));
+		} catch (UnknownHostException e) {
+			throw new RuntimeException(e);
+		}
 	}
 
 	@Bean("httpHosts")

@@ -32,6 +32,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -306,115 +307,38 @@ public class HttpProxyManager implements InitializingBean, DisposableBean {
 			try {
 				HttpServletRequest servletRequest = (HttpServletRequest) request;
 				HttpServletResponse servletResponse = (HttpServletResponse) response;
-				ServletContext servletContext = servletRequest.getServletContext();
 
-				if (Optional.ofNullable(servletRequest.getHeader("Upgrade")).filter(x->x.equals("websocket")).isPresent()) {
-
-			        InetAddress remoteAddress = InetAddress.getByName(request.getRemoteAddr());
-					int serverPort = request.getServerPort();
-					String serverName = request.getServerName();
-					String scheme = request.getScheme();
-					HttpTunnel httpTunnel = sharingManager.getTunnelForHttpRequest(remoteAddress, serverPort, serverName, scheme);
-					
-					if (httpTunnel == null) {
-						servletResponse.sendError(404);
-						return;
-					}
-					
-					JettyWebSocketServerContainer container = JettyWebSocketServerContainer
-							.getContainer(servletContext);
-					
-					URI mappedUri = setWebSocketScheme(new URI(rewriteUrl(new URL(servletRequest.getRequestURL().toString()), httpTunnel)));
-
-					log.debug(String.format("WebSockets proxy connection to %s", mappedUri));
-					ClientUpgradeRequest clientUpgradeRequest = newProxyClientUpgradeRequest(servletRequest, httpTunnel);
-					WebSocketClient client = newWsClient();
-					
-					ServerSideWsHandler serverSideWsHandler = new ServerSideWsHandler();
-					ClientSideWsHandler clientSideHandler = new ClientSideWsHandler();
-					serverSideWsHandler.setCloseHandler(()->IOTools.runFailable(()->client.stop()));
-					clientSideHandler.getSession().thenAccept(s->{
-						serverSideWsHandler.setTextMessageHandler(m->{
-							try {
-								s.getRemote().sendString(m);
-							} catch (IOException e) {
-								// TODO Auto-generated catch block
-								e.printStackTrace();
-							}
-						});
-						// TODO
-					});
-					serverSideWsHandler.getSession().thenAccept(s->{
-						clientSideHandler.setTextMessageHandler(m->{
-							try {
-								s.getRemote().sendString(m);
-							} catch (IOException e) {
-								// TODO Auto-generated catch block
-								e.printStackTrace();
-							}
-						});
-						// TODO
-					});
-					
-					
-					CompletableFuture<Session> futureConnect = client.connect(clientSideHandler, mappedUri, clientUpgradeRequest);
-					boolean clientConnected = futureConnect.handle((s,e)->{
-							if (e != null) {
-								IOTools.runFailable(()->client.stop());
-								return false;
-							} else {
-								clientSideHandler.setCloseHandler(()->IOTools.runFailable(()->client.stop()));
-								return true;
-							}
-					}).get();
-					if (clientConnected) {
-						boolean ok = container.upgrade((upgradeRequest, upgradeResponse) -> {
-							return serverSideWsHandler;
-						}, servletRequest, servletResponse);
-						if (!ok) {
-							IOTools.runFailable(()->client.stop());
-							throw new IOException("Unable to upgrade WebSocket connection");
-						}
-					} else {
-						int errorCode;
-						try {
-							errorCode = clientSideHandler.getErrorCode().get(2, TimeUnit.SECONDS);
-						} catch (TimeoutException x) {
-							log.error("Error waiting for an error event on a failed WS connection");
-							errorCode = 500;
-						}
-						log.warn("Coudn't connect WS to server so we replicate the error code to the client: {}", errorCode);
-						servletResponse.sendError(errorCode);
-						return;
-					}
-					return;
-				}
-
-		        InetAddress remoteAddress = InetAddress.getByName(request.getRemoteAddr());
-				HttpServletRequest httpServletRequest = (HttpServletRequest) request;
+		        // ID http tunnel
+				InetAddress remoteAddress = InetAddress.getByName(request.getRemoteAddr());
 				int serverPort = request.getServerPort();
 				String serverName = request.getServerName();
-				HttpTunnel httpTunnel = sharingManager.getTunnelForHttpRequest(remoteAddress, serverPort, serverName, request.getScheme());
+				String scheme = request.getScheme();
+				HttpTunnel httpTunnel = sharingManager.getTunnelForHttpRequest(remoteAddress, serverPort, serverName, scheme);
+
+				if (Optional.ofNullable(servletRequest.getHeader("Upgrade")).filter(x->x.equals("websocket")).isPresent()) {
+			        websocketUpgrade(servletRequest, servletResponse, httpTunnel);
+					return;
+				}
+				
 				if (httpTunnel != null) {
-					log.info("Request {} {} for tunnel {}", httpServletRequest.getMethod(),
-							httpServletRequest.getRequestURL(), httpTunnel.getTargetId());
+					log.info("Request {} {} for tunnel {}", servletRequest.getMethod(),
+							servletRequest.getRequestURL(), httpTunnel.getTargetId());
 					request.setAttribute(REQUEST_KEY_HTTPTUNNEL, httpTunnel);
 					request.setAttribute(REQUEST_KEY_REWRITE_HEADERS, true); // TODO
 					request.setAttribute(REQUEST_KEY_HIDE_PROXY, true); // TODO
 					super.service(request, response);
 				} else {
-					log.warn("Request {} {} rejected", httpServletRequest.getMethod(),
-							httpServletRequest.getRequestURL());
-					// ((HttpServletResponse) response).sendError(404, "Unknown resource requested");
+					log.warn("Request {} {} rejected: Unknown tunnel or unauthorized address",
+							servletRequest.getMethod(), servletRequest.getRequestURL());
 					HttpServletResponse hsr = (HttpServletResponse) response;
 					try (PrintWriter pw = new PrintWriter(hsr.getOutputStream())) {
 						hsr.setStatus(404);
 						
 						StringBuilder loginUrl = getPublicCloudUrl();
-						String requestUrl = getRequestUrl(httpServletRequest);
-						List<MediaType> accepted = MediaType.parseMediaTypes(httpServletRequest.getHeader("Accept"));						
+						String requestUrl = getRequestUrl(servletRequest);
+						List<MediaType> accepted = MediaType.parseMediaTypes(servletRequest.getHeader("Accept"));						
 						if (accepted.contains(MediaType.TEXT_HTML)) {
-						hsr.setContentType("text/html;charset=UTF-8");
+							hsr.setContentType("text/html;charset=UTF-8");
 							pw.println("<html><head><title>511 Network Authentication Required</title>");
 							pw.println("<script>");
 							pw.println("</script>");
@@ -439,6 +363,85 @@ public class HttpProxyManager implements InitializingBean, DisposableBean {
 			} catch (Exception e) {
 				log.error("Error " + request, e);
 				throw new RuntimeException(e);
+			}
+		}
+
+		private void websocketUpgrade(HttpServletRequest servletRequest,
+				HttpServletResponse servletResponse, HttpTunnel httpTunnel)
+				throws UnknownHostException, IOException, URISyntaxException, MalformedURLException, ServletException,
+				InterruptedException, ExecutionException {
+
+			if (httpTunnel == null) {
+				servletResponse.sendError(404);
+				return;
+			}
+			
+			ServletContext servletContext = servletRequest.getServletContext();
+			JettyWebSocketServerContainer container = JettyWebSocketServerContainer
+					.getContainer(servletContext);
+			
+			URI mappedUri = setWebSocketScheme(new URI(rewriteUrl(new URL(servletRequest.getRequestURL().toString()), httpTunnel)));
+
+			log.debug(String.format("WebSockets proxy connection to %s", mappedUri));
+			ClientUpgradeRequest clientUpgradeRequest = newProxyClientUpgradeRequest(servletRequest, httpTunnel);
+			WebSocketClient client = newWsClient();
+			
+			ServerSideWsHandler serverSideWsHandler = new ServerSideWsHandler();
+			ClientSideWsHandler clientSideHandler = new ClientSideWsHandler();
+			serverSideWsHandler.setCloseHandler(()->IOTools.runFailable(()->client.stop()));
+			clientSideHandler.getSession().thenAccept(s->{
+				serverSideWsHandler.setTextMessageHandler(m->{
+					try {
+						s.getRemote().sendString(m);
+					} catch (IOException e) {
+						// TODO Auto-generated catch block
+						e.printStackTrace();
+					}
+				});
+				// TODO
+			});
+			serverSideWsHandler.getSession().thenAccept(s->{
+				clientSideHandler.setTextMessageHandler(m->{
+					try {
+						s.getRemote().sendString(m);
+					} catch (IOException e) {
+						// TODO Auto-generated catch block
+						e.printStackTrace();
+					}
+				});
+				// TODO
+			});
+			
+			
+			CompletableFuture<Session> futureConnect = client.connect(clientSideHandler, mappedUri, clientUpgradeRequest);
+			boolean clientConnected = futureConnect.handle((s,e)->{
+					if (e != null) {
+						IOTools.runFailable(()->client.stop());
+						return false;
+					} else {
+						clientSideHandler.setCloseHandler(()->IOTools.runFailable(()->client.stop()));
+						return true;
+					}
+			}).get();
+			if (clientConnected) {
+				boolean ok = container.upgrade((upgradeRequest, upgradeResponse) -> {
+					return serverSideWsHandler;
+				}, servletRequest, servletResponse);
+				if (!ok) {
+					IOTools.runFailable(()->client.stop());
+					throw new IOException("Unable to upgrade WebSocket connection");
+				}
+			} else {
+				int errorCode;
+				try {
+					errorCode = clientSideHandler.getErrorCode().get(2, TimeUnit.SECONDS);
+				} catch (TimeoutException x) {
+					log.error("Error waiting for an error event on a failed WS connection");
+					errorCode = 500;
+				}
+				log.warn("Coudn't connect WS to server so we replicate the error code to the client: {}", errorCode);
+				servletResponse.sendError(errorCode);
+				return;
 			}
 		}
 

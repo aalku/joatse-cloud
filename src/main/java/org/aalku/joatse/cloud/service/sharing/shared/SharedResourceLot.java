@@ -40,6 +40,7 @@ public class SharedResourceLot {
 	private BiConsumer<Long, AsynchronousSocketChannel> tcpConnectionListener;
 	private Collection<TcpTunnel> tcpItems = new ArrayList<>(1);
 	private Collection<HttpTunnel> httpItems = new ArrayList<>(1);
+	private boolean authorizeByHttpUrl;
 
 	public SharedResourceLot(JoatseUser owner, LotSharingRequest request, String cloudPublicHostname) {
 		this.owner = owner;
@@ -61,6 +62,8 @@ public class SharedResourceLot {
 		for (TunnelRequestHttpItem r : httpItems) {
 			this.addHttpItem(r);
 		}
+		
+		this.authorizeByHttpUrl = request.isAutoAuthorizeByHttpUrl();
 
 		
 	}
@@ -206,5 +209,9 @@ public class SharedResourceLot {
 			}
 		}
 		return res;
+	}
+
+	public boolean isAuthorizeByHttpUrl() {
+		return authorizeByHttpUrl;
 	}
 }

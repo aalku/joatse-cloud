@@ -12,11 +12,16 @@ import org.aalku.joatse.cloud.config.ListenerConfigurationDetector;
 import org.aalku.joatse.cloud.tools.io.PortRange;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Configuration;
 
 @Configuration
 public class HttpEndpointGenerator {
 	
+	public enum PrefixStrategy {
+		URL, DESCRIPTION
+	}
+
 	private static final String DYNAMIC_PREFIX = "*.";
 
 	@Autowired
@@ -33,6 +38,12 @@ public class HttpEndpointGenerator {
 	
 	@Autowired
 	private ListenerConfigurationDetector listenerConfigurationDetector;
+
+	@Value("${httpEndpointGenerator.prefixStrategy:DESCRIPTION}")
+	private PrefixStrategy prefixStrategy;
+
+	@Value("${httpEndpointGenerator.prefixHashLength:6}")
+	private int prefixHashLength;
 
 	public ListenAddress generateListenAddress(HttpTunnel tunnel, LinkedHashSet<ListenAddress> forbiddenAddresses,
 			String askedCloudHostname) {
@@ -77,14 +88,27 @@ public class HttpEndpointGenerator {
 	}
 
 	private String generatePrefix(HttpTunnel tunnel) {
-		return generateSummaryPreffix(tunnel) + "-" + generateHashPrefix(tunnel);
+		String prefixBase;
+		if (this.prefixStrategy == PrefixStrategy.URL) {
+			prefixBase = generateSummaryPreffixWithURL(tunnel);
+		} else if (this.prefixStrategy == PrefixStrategy.DESCRIPTION) {
+			prefixBase = generateSummaryPreffixWithDescription(tunnel);
+		} else {
+			throw new IllegalArgumentException();
+		}
+		return prefixBase + "-" + generateHashPrefix(tunnel, this.prefixHashLength);
 	}
 	
 	private static String cleanString(String str) {
-		return str.replaceAll("[^a-zA-Z0-9]+", "-").replaceFirst("^-", "").replaceFirst("-$", "").toLowerCase();
+		return str.replaceAll("[^a-zA-Z0-9]+", "-").replaceFirst("^-", "").replaceFirst("-$", "").replaceAll("([a-z])([A-Z])", "$1-$2").toLowerCase();
 	}
 
-	private static String generateSummaryPreffix(HttpTunnel tunnel) {
+	private static String generateSummaryPreffixWithDescription(HttpTunnel tunnel) {
+		StringBuilder sb = new StringBuilder(cleanString(tunnel.getTargetDescription()));
+		return sb.toString();
+	}
+
+	private static String generateSummaryPreffixWithURL(HttpTunnel tunnel) {
 		URL url = tunnel.getTargetURL();
 		StringBuilder sb = new StringBuilder(cleanString(url.getHost()));
 		Optional.of(url.getPort()).filter(p -> p >=0 && p != 80 && p != 443).ifPresent(p->{
@@ -93,7 +117,7 @@ public class HttpEndpointGenerator {
 		return sb.toString();
 	}
 
-	private static String generateHashPrefix(HttpTunnel tunnel) {
+	private static String generateHashPrefix(HttpTunnel tunnel, int hashLength) {
 		int targetPort = tunnel.getTargetPort();
 		try {
 			MessageDigest md = MessageDigest.getInstance("SHA-1");
@@ -101,9 +125,12 @@ public class HttpEndpointGenerator {
 			md.update(new byte[] {(byte)(targetPort & 0xff), (byte)((targetPort >> 8) & 0xff)});
 			md.update(tunnel.getTargetURL().toExternalForm().getBytes(StandardCharsets.UTF_8));
 			byte[] digest = md.digest();
+			if (hashLength > digest.length) {
+				throw new IllegalArgumentException("Selected hash algorithm can only generate " + digest.length + " chars");
+			}
 			StringBuilder sb = new StringBuilder(2);
 			final String dictionary = "abcdefghmprstxyz"; 
-			for (int i = 0; i < 4; i++) {
+			for (int i = 0; i < hashLength; i++) {
 				char c = dictionary.charAt(digest[i] & 0x0F);
 				sb.append(c);
 			}

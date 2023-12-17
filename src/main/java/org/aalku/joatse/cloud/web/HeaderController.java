@@ -15,6 +15,7 @@ import org.springframework.web.server.ResponseStatusException;
 @Controller
 public class HeaderController {
 	
+	@SuppressWarnings("unused")
 	private Logger log = LoggerFactory.getLogger(HeaderController.class);
 	
 	@Autowired

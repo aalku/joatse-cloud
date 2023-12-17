@@ -212,7 +212,7 @@ public class SharingManager implements InitializingBean, DisposableBean {
 			} else {
 				rejectConnectionRequest(request.getUuid(), "Invalid preconfirmation");
 			}
-			return new TunnelCreationResponse(request.getUuid(), null, request.future);
+			return new TunnelCreationResponse(request.getUuid(), null, request.getFuture());
 		} else if (automaticTunnelAcceptance != null) { // TODO remove this mock
 			new Thread() {
 				public void run() {
@@ -226,10 +226,11 @@ public class SharingManager implements InitializingBean, DisposableBean {
 				};
 			}.start();
 		}
-		return new TunnelCreationResponse(request.getUuid(), buildConfirmationUri(request), request.future);
+		return new TunnelCreationResponse(request.getUuid(), buildConfirmationUri(request), request.getFuture());
 	}
 
 	private String checkPreconfirmation(PreconfirmedShare saved, LotSharingRequest request) {
+		// TODO autoAuthorizeByHttpUrl
 		LotSharingRequest savedReq;
 		try {
 			savedReq = LotSharingRequest.fromJson(new JSONObject(saved.getResources()), saved.getRequesterAddress());
@@ -283,11 +284,11 @@ public class SharingManager implements InitializingBean, DisposableBean {
 			} finally {
 				lock.writeLock().unlock();
 			}
-			request.future.complete(newTunnel); // Without lock
+			request.getFuture().complete(newTunnel); // Without lock
 		} catch (Exception e) {
 			if (request != null) {
 				// Reject
-				request.future.completeExceptionally(e);
+				request.getFuture().completeExceptionally(e);
 				return;
 			} else {
 				throw e;
@@ -332,7 +333,7 @@ public class SharingManager implements InitializingBean, DisposableBean {
 			lock.writeLock().unlock();
 		}
 		if (request != null) {
-			request.future.complete(new TunnelCreationResult.Rejected(request, reason)); // Out of lock
+			request.getFuture().complete(new TunnelCreationResult.Rejected(request, reason)); // Out of lock
 		}
 	}
 
@@ -383,21 +384,33 @@ public class SharingManager implements InitializingBean, DisposableBean {
 	 * A httpClientEnd connection has arrived. Returns a context object to be used
 	 * on the next call.
 	 */
-	public Object httpClientEndConnected(UUID uuid, long targetId) {
-		HttpTunnel httpTarget = tunnelRegistry.getHttpTunnel(uuid, targetId);
-		if (httpTarget == null) {
+	public Object switchboardConnected(UUID uuid, long targetId) {
+		Object tunnel = tunnelRegistry.getTunnel(uuid, targetId);
+		if (tunnel == null) {
 			log.warn("Unexpected connection or wrong protocol: {}.{}", uuid, targetId);
 			return null;
 		} else {
 			log.info("Switchboard Received Tunnel connection: {}.{}", uuid, targetId);
-			return httpTarget;
+			return tunnel;
 		}
 	}
 
 	/** The httpClientEnd connection is ready */
-	public void httpClientEndConnectionReady(Object context, AsynchronousSocketChannel channel) {
-		HttpTunnel httpTarget = (HttpTunnel) context;
-		httpTarget.getTunnel().tunnelTcpConnection(httpTarget.getTargetId(), channel);
+	public void switchboardConnectionReady(Object context, AsynchronousSocketChannel channel) {
+		SharedResourceLot tunnel = null;
+		long targetId = -1;
+		if (context instanceof HttpTunnel) {
+			HttpTunnel httpTarget = (HttpTunnel) context;
+			tunnel = httpTarget.getTunnel();
+			targetId = httpTarget.getTargetId();
+		} else if (context instanceof TcpTunnel) {
+			TcpTunnel tcpTarget = (TcpTunnel) context;
+			tunnel = tcpTarget.getTunnel();
+			targetId = tcpTarget.getTargetId();
+		} else {
+			throw new RuntimeException();
+		}
+		tunnel.tunnelTcpConnection(targetId, channel);
 		// TODO schedule a periodic check to log the disconnection
 	}
 
@@ -411,14 +424,21 @@ public class SharingManager implements InitializingBean, DisposableBean {
 	public HttpTunnel getTunnelForHttpRequest(InetAddress remoteAddress, int serverPort, String serverName, String protocol) {
 		List<HttpTunnel> res = tunnelRegistry.findMatchingHttpTunnel(remoteAddress, serverPort, serverName, protocol);
 		if (res.size() > 0) {
-			return res.get(0);
+			HttpTunnel ht = res.get(0);
+			SharedResourceLot srl = ht.getTunnel();
+			/* If not authorized maybe it should be */
+			if (!srl.getAllowedAddresses().contains(remoteAddress) 
+					&& srl.isAuthorizeByHttpUrl()) {
+				srl.addAllowedAddress(remoteAddress);
+			}
+			return ht;
 		} else {
 			return null;
 		}
 	}
 
 	public HttpTunnel getHttpTunnelById(UUID uuid, long httpTunnelId) {
-		HttpTunnel res = tunnelRegistry.getHttpTunnel(uuid, httpTunnelId);
+		HttpTunnel res = tunnelRegistry.getTunnel(uuid, httpTunnelId);
 		return res;
 	}
 }

@@ -4,7 +4,6 @@ import java.net.InetAddress;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -26,9 +25,16 @@ public class TunnelRegistry {
 	public synchronized List<HttpTunnel> findMatchingHttpTunnel(InetAddress remoteAddress, int serverPort, String serverName, String protocol) {
 		ListenAddress reachedAddress = new ListenAddress(serverPort, serverName, protocol);
 		List<HttpTunnel> tunnelsMatching = tunnelsByUUID.values().stream()
-				.filter(t -> t.getAllowedAddresses().contains(remoteAddress))
 				.flatMap(x -> x.getHttpItems().stream())
 				.filter(http->http.getListenAddress().equals(reachedAddress))
+				.filter(http -> {
+					SharedResourceLot t = http.getTunnel();
+					if (t.isAuthorizeByHttpUrl()) {
+						return true;
+					} else {
+						return t.getAllowedAddresses().contains(remoteAddress);
+					}
+				})
 				.collect(Collectors.toList());
 		return tunnelsMatching;
 	}
@@ -42,8 +48,18 @@ public class TunnelRegistry {
 		return tunnelsMatching;
 	}
 	
-	public synchronized HttpTunnel getHttpTunnel(UUID uuid, long targetId) {
-		return Optional.ofNullable(tunnelsByUUID.get(uuid)).map(t -> t.getHttpItem(targetId)).orElse(null);
+	@SuppressWarnings("unchecked")
+	public synchronized <E> E getTunnel(UUID uuid, long targetId) {
+		SharedResourceLot srl = tunnelsByUUID.get(uuid);
+		if (srl == null) {
+			return null;
+		} else {
+			Object res = srl.getHttpItem(targetId);
+			if (res == null) {
+				res = srl.getTcpItem(targetId);
+			}
+			return (E) res;
+		}
 	}
 
 	public synchronized void removeTunnel(UUID uuid) {
