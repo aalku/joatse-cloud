@@ -5,6 +5,7 @@ import java.net.InetSocketAddress;
 import java.nio.channels.AsynchronousSocketChannel;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Iterator;
@@ -12,19 +13,25 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.function.BiConsumer;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
+import org.aalku.joatse.cloud.service.sharing.command.CommandTunnel;
+import org.aalku.joatse.cloud.service.sharing.command.TerminalSessionHandler;
 import org.aalku.joatse.cloud.service.sharing.http.HttpEndpointGenerator;
 import org.aalku.joatse.cloud.service.sharing.http.HttpTunnel;
 import org.aalku.joatse.cloud.service.sharing.http.ListenAddress;
 import org.aalku.joatse.cloud.service.sharing.request.LotSharingRequest;
+import org.aalku.joatse.cloud.service.sharing.request.TunnelRequestCommandItem;
 import org.aalku.joatse.cloud.service.sharing.request.TunnelRequestHttpItem;
 import org.aalku.joatse.cloud.service.sharing.request.TunnelRequestTcpItem;
 import org.aalku.joatse.cloud.service.user.vo.JoatseUser;
 import org.json.JSONArray;
 import org.json.JSONObject;
+
+import com.google.common.base.Supplier;
 
 public class SharedResourceLot {
 
@@ -37,10 +44,13 @@ public class SharedResourceLot {
 	/**
 	 * Handler for tcp or http(s) connections that are handled as tcp at this point
 	 */
-	private BiConsumer<Long, AsynchronousSocketChannel> tcpConnectionListener;
+	private volatile BiConsumer<Long, AsynchronousSocketChannel> tcpConnectionListener;
+	private volatile TerminalSessionHandler terminalSessionHandler;
 	private Collection<TcpTunnel> tcpItems = new ArrayList<>(1);
 	private Collection<HttpTunnel> httpItems = new ArrayList<>(1);
+	private Collection<CommandTunnel> commandItems = new ArrayList<>(1);
 	private boolean authorizeByHttpUrl;
+	private Supplier<CompletableFuture<byte[]>> targetPublicKeyProvider;
 
 	public SharedResourceLot(JoatseUser owner, LotSharingRequest request, String cloudPublicHostname) {
 		this.owner = owner;
@@ -62,7 +72,13 @@ public class SharedResourceLot {
 		for (TunnelRequestHttpItem r : httpItems) {
 			this.addHttpItem(r);
 		}
-		
+
+		List<TunnelRequestCommandItem> cItems = request.getItems().stream().filter(x -> x instanceof TunnelRequestCommandItem)
+				.map(x -> (TunnelRequestCommandItem) x).collect(Collectors.toList());
+		for (TunnelRequestCommandItem r: cItems) {
+			this.addCommandItem(r);
+		}
+
 		this.authorizeByHttpUrl = request.isAutoAuthorizeByHttpUrl();
 
 		
@@ -71,7 +87,7 @@ public class SharedResourceLot {
 	public void setTcpConnectionConsumer(BiConsumer<Long, AsynchronousSocketChannel> tcpConnectionListener) {
 		this.tcpConnectionListener = tcpConnectionListener;
 	}
-
+	
 	public Collection<InetAddress> getAllowedAddresses() {
 		synchronized (allowedAddresses) {
 			return new LinkedHashSet<>(allowedAddresses);
@@ -106,13 +122,25 @@ public class SharedResourceLot {
 	}
 	
 	private void addHttpItem(TunnelRequestHttpItem r) {
-		httpItems.add(new HttpTunnel(this, r.targetId, r.targetDescription, r.getTargetUrl(), r.isUnsafe(), r.getListenHostname()));
+		httpItems.add(new HttpTunnel(this, r.targetId, r.targetDescription, r.getTargetUrl(), r.isUnsafe(), r.getListenHostname(), r.isHideProxy()));
+	}
+	
+	private void addCommandItem(TunnelRequestCommandItem r) {
+		commandItems.add(new CommandTunnel(this, r.targetId, r.targetDescription, r.targetHostname, r.targetPort, r.getTargetUser(), r.getCommand()));
 	}
 
 	public TcpTunnel getTcpItem(long targetId) {
 		return tcpItems.stream().filter(i->i.targetId==targetId).findAny().orElse(null);
 	}
 
+	public HttpTunnel getHttpItem(long targetId) {
+		return getHttpItems().stream().filter(i->i.getTargetId()==targetId).findAny().orElse(null);
+	}
+
+	public CommandTunnel getCommandItem(long targetId) {
+		return getCommandItems().stream().filter(i->i.getTargetId()==targetId).findAny().orElse(null);
+	}
+	
 	public Collection<TcpTunnel> getTcpItems() {
 		return tcpItems;
 	}
@@ -125,10 +153,10 @@ public class SharedResourceLot {
 		return httpItems;
 	}
 
-	public HttpTunnel getHttpItem(long targetId) {
-		return getHttpItems().stream().filter(i->i.getTargetId()==targetId).findAny().orElse(null);
+	public Collection<CommandTunnel> getCommandItems() {
+		return commandItems;
 	}
-
+	
 	/**
 	 * Create a tunneled tcp connection.
 	 * 
@@ -139,9 +167,9 @@ public class SharedResourceLot {
 	 * @param channel
 	 */
 	public void tunnelTcpConnection(long targetId, AsynchronousSocketChannel channel) {
-		tcpConnectionListener.accept(targetId, channel);
+		this.tcpConnectionListener.accept(targetId, channel);
 	}
-
+	
 	public void selectTcpPorts(Collection<Integer> tcpOpenPorts) {
 		Iterator<Integer> it = tcpOpenPorts.iterator();
 		tcpItems.forEach(i->{
@@ -187,7 +215,6 @@ public class SharedResourceLot {
 			Optional<TcpTunnel> socks5Item = tcpItems.stream().filter(isSocksPredicate).findAny();
 			if (socks5Item.isPresent()) {
 				JSONArray a = new JSONArray();
-//				TcpTunnel i = socks5Item.get();
 				JSONObject o = new JSONObject();
 				// Nothing?
 				a.put(o);
@@ -207,11 +234,48 @@ public class SharedResourceLot {
 				}
 				res.put("tcpTunnels", a);
 			}
+
 		}
+		
+		Collection<CommandTunnel> commandItems = Optional.ofNullable(this.commandItems).orElse(Collections.emptyList());
+		if (commandItems.size() > 0) {
+			JSONArray a = new JSONArray();
+			for (CommandTunnel i: commandItems) {
+				JSONObject o = new JSONObject();
+				o.put("targetDescription", i.getTargetDescription());
+				o.put("targetHostname", i.getTargetHostname());
+				o.put("targetPort", i.getTargetPort());
+				o.put("targetUser", i.getTargetUser());
+				o.put("command", new JSONArray(Arrays.asList(i.getCommand())));
+				a.put(o);
+			}
+			res.put("commandTunnels", a);
+		}
+
 		return res;
 	}
 
-	public boolean isAuthorizeByHttpUrl() {
+	public boolean isAutoAuthorizeByHttpUrl() {
 		return authorizeByHttpUrl;
+	}
+
+	public TerminalSessionHandler getTerminalSessionHandler() {
+		return terminalSessionHandler;
+	}
+
+	public void setTerminalSessionHandler(TerminalSessionHandler terminalSessionHandler) {
+		this.terminalSessionHandler = terminalSessionHandler;
+	}
+
+	public CompletableFuture<byte[]> getTargetPublicKey() {
+		return this.targetPublicKeyProvider.get();
+	}
+
+	public Supplier<CompletableFuture<byte[]>> getTargetPublicKeyProvider() {
+		return targetPublicKeyProvider;
+	}
+
+	public void setTargetPublicKeyProvider(Supplier<CompletableFuture<byte[]>> targetPublicKeyProvider) {
+		this.targetPublicKeyProvider = targetPublicKeyProvider;
 	}
 }

@@ -3,6 +3,7 @@ package org.aalku.joatse.cloud.web;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -14,6 +15,7 @@ import java.util.stream.Collectors;
 import org.aalku.joatse.cloud.config.ListenerConfigurationDetector;
 import org.aalku.joatse.cloud.service.JWSSession;
 import org.aalku.joatse.cloud.service.JoatseWsHandler;
+import org.aalku.joatse.cloud.service.sharing.command.CommandTunnel;
 import org.aalku.joatse.cloud.service.sharing.http.HttpTunnel;
 import org.aalku.joatse.cloud.service.sharing.shared.SharedResourceLot;
 import org.aalku.joatse.cloud.service.sharing.shared.TcpTunnel;
@@ -95,11 +97,11 @@ public class SessionController {
 			if (!tcpItems.isEmpty()) {
 				for (TcpTunnel x: tcpItems) {
 					Map<String, Object> item = new LinkedHashMap<>();
-					item.put("targetId", x.targetId);
+					item.put("targetId", "" + x.targetId);
 					item.put("targetDescription", x.targetDescription);
 					item.put("targetHostname", x.targetHostname);
 					item.put("targetPort", x.targetPort);
-					item.put("listenHostname", webListenerConfiguration.getPublicHostname());
+					item.put("listenHostname", webListenerConfiguration.getPublicHostnameTcp());
 					item.put("listenPort", x.getListenPort());
 					atcp.add(item);
 				}
@@ -111,7 +113,7 @@ public class SessionController {
 			if (!httpItems.isEmpty()) {
 				for (HttpTunnel x: httpItems) {
 					Map<String, Object> item = new LinkedHashMap<>();
-					item.put("targetId", x.getTargetId());
+					item.put("targetId", "" + x.getTargetId());
 					item.put("targetDescription", x.getTargetDescription());
 					item.put("targetUrl", x.getTargetURL().toString());
 					item.put("listenUrl", x.getListenUrl());
@@ -119,12 +121,28 @@ public class SessionController {
 				}
 			}
 			m.put("httpItems", ahttp);
+
+			Collection<CommandTunnel> commandItems = t.getCommandItems();
+			List<Map<String, Object>> acmd = new ArrayList<>(commandItems.size());
+			if (!commandItems.isEmpty()) {
+				for (CommandTunnel x: commandItems) {
+					Map<String, Object> item = new LinkedHashMap<>();
+					item.put("targetId", "" + x.getTargetId());
+					item.put("targetDescription", x.getTargetDescription());
+					item.put("targetHostname", x.getTargetHostname());
+					item.put("targetPort", x.getTargetPort());
+					item.put("targetUser", x.getTargetUser());
+					item.put("command", Arrays.asList(x.getCommand()));
+					acmd.add(item);
+				}
+			}
+			m.put("commandItems", acmd);
+			
 			return m;
 		}).collect(Collectors.toList()));
 		return res;
 	}
 
-	
 	@DeleteMapping("/sessions")
 	@ResponseBody
 	public Map<String, Object> closeSession(@RequestBody Map<String, Object> payload) {

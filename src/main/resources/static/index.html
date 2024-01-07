@@ -18,9 +18,9 @@
 		crossorigin="anonymous"></script>
 	<!-- BootstapVue -->
 	<link type="text/css" rel="stylesheet" href="https://unpkg.com/bootstrap-vue@latest/dist/bootstrap-vue.min.css" />
-	<script src="/lib/bootstrap-vue.min.js"></script>
+	<script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap-vue/2.23.1/bootstrap-vue.min.js" integrity="sha512-SP/zE7YazvnUG95bWnA1AeC5+WtAOqumEHSgcKTNfVefAMsDcVCt6D3Q3goqR3vSf50zPG3OZtnMjBJd9GBgkw==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 	<!-- Load the following for BootstrapVueIcons support -->
-	<script src="/lib/bootstrap-vue-icons.min.js"></script>
+	<script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap-vue/2.23.1/bootstrap-vue-icons.min.js" integrity="sha512-cJ0T2fXGDec9dvmF2+clKAbs4miMXYPrQxusW6uKqxuHUozvqg1ZB7DzQ7qkII12/bivnK1osSlomt6vqwE4nw==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 	<script src="./index.js" type="module"></script>
 </head>
 <body>
@@ -35,7 +35,7 @@
 					<b-card-header header-tag="header" class="p-1" role="tab">
 						<b-container fluid>
 							<div class="btn-group d-flex" role="group">
-								<b-button v-b-toggle.accordion-1 variant="outline-primary">
+								<b-button v-b-toggle="`accordion-1-${iS}`" variant="outline-primary">
 									Session from {{s.requesterAddress}} created at {{s.creationTime}}
 								</b-button>
 								<b-button variant="outline-primary" disabled>Bandwith:
@@ -46,7 +46,7 @@
 							</div>
 						</b-container>						
 					</b-card-header>
-					<b-collapse id="accordion-1" accordion="session-accordion" role="tabpanel">
+					<b-collapse :id="`accordion-1-${iS}`" accordion="session-accordion" role="tabpanel">
 						<b-card-body>
 							<b-container fluid>
 								<b-row>
@@ -88,6 +88,22 @@
 											<b-form-input :id="`http-s-${h.targetId}`" v-model="h.description" readonly></b-form-input>
 											<b-input-group-append>
 												<b-button variant="outline-secondary" @click="openHttpTunnel(s,h)"><b-icon-caret-right-square/></b-button>
+											</b-input-group-append>
+										</b-input-group>
+									</b-col>
+								</b-row>
+							</b-container>
+							<b-container fluid>
+								<b-row v-for="(c, ic) in s.commandItems" :key="c.targetId">
+									<b-col sm="4">
+										<label :for="`command-s-${c.targetId}`">Shared command<span v-if="c.targetDescription"> -
+												{{c.targetDescription}}</span></label>
+									</b-col>
+									<b-col sm="8">
+										<b-input-group>
+											<b-form-input :id="`command-s-${c.targetId}`" v-model="c.description" readonly></b-form-input>
+											<b-input-group-append>
+												<b-button variant="outline-secondary" @click="openCommandTunnel(s,c)"><b-icon-caret-right-square/></b-button>
 											</b-input-group-append>
 										</b-input-group>
 									</b-col>
@@ -148,9 +164,9 @@
 			<div class="accordion" role="tablist">
 				<b-card no-body class="mb-1" v-for="(ps, iPS) in sessions.preconfirmedShares.filter(x=>!x.onLiveSession)" :key="ps.uuid">
 					<b-card-header header-tag="header" class="p-1" role="tab">
-						<b-button block v-b-toggle.accordion-2 variant="outline-primary">Preconfirmed share {{ps.uuid}}</b-button>
+						<b-button block v-b-toggle="`accordion-2-${iPS}`" variant="outline-primary">Preconfirmed share {{ps.uuid}}</b-button>
 					</b-card-header>
-					<b-collapse id="accordion-2" accordion="preconfirmed-accordion" role="tabpanel">
+					<b-collapse :id="`accordion-2-${iPS}`" accordion="preconfirmed-accordion" role="tabpanel">
 						<b-card-body>
 							<b-container fluid>
 								<b-row v-for="(t, it) in ps.tcpTunnels" :key="t.targetId">
@@ -171,6 +187,17 @@
 									</b-col>
 									<b-col sm="8">
 										<b-form-input :id="`http-s-${h.targetId}`" v-model="h.description" readonly></b-form-input>
+									</b-col>
+								</b-row>
+							</b-container>
+							<b-container fluid>
+								<b-row v-for="(c, ic) in ps.commandTunnels" :key="c.targetId">
+									<b-col sm="4">
+										<label :for="`command-s-${c.targetId}`">Shared command<span v-if="c.targetDescription"> -
+												{{c.targetDescription}}</span></label>
+									</b-col>
+									<b-col sm="8">
+										<b-form-input :id="`command-s-${c.targetId}`" v-model="c.description" readonly></b-form-input>
 									</b-col>
 								</b-row>
 							</b-container>

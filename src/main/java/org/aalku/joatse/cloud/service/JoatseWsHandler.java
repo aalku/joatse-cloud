@@ -1,15 +1,14 @@
 package org.aalku.joatse.cloud.service;
 
 import java.io.IOException;
-import java.nio.channels.AsynchronousSocketChannel;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.NoSuchElementException;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.BiConsumer;
 import java.util.stream.Collectors;
 
 import org.aalku.joatse.cloud.service.JWSSession.SessionPingHandler;
@@ -17,12 +16,15 @@ import org.aalku.joatse.cloud.service.sharing.SharingManager;
 import org.aalku.joatse.cloud.service.sharing.SharingManager.TunnelCreationResponse;
 import org.aalku.joatse.cloud.service.sharing.SharingManager.TunnelCreationResult;
 import org.aalku.joatse.cloud.service.sharing.SharingManager.TunnelCreationResult.Accepted;
+import org.aalku.joatse.cloud.service.sharing.command.CommandTunnel;
+import org.aalku.joatse.cloud.service.sharing.command.TerminalSessionHandler;
 import org.aalku.joatse.cloud.service.sharing.http.HttpTunnel;
 import org.aalku.joatse.cloud.service.sharing.request.LotSharingRequest;
 import org.aalku.joatse.cloud.service.sharing.shared.SharedResourceLot;
 import org.aalku.joatse.cloud.service.sharing.shared.TcpTunnel;
 import org.aalku.joatse.cloud.service.user.vo.JoatseUser;
 import org.aalku.joatse.cloud.tools.io.IOTools;
+import org.json.JSONArray;
 import org.json.JSONObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -119,7 +121,7 @@ public class JoatseWsHandler extends AbstractWebSocketHandler implements WebSock
 			String request = js.getString("request");
 			if (request.equals("CONNECTION")) {
 				
-				LotSharingRequest lotSharingRequest = LotSharingRequest.fromJson(js, wsSession.getRemoteAddress());
+				LotSharingRequest lotSharingRequest = LotSharingRequest.fromJsonRequest(js, wsSession.getRemoteAddress());
 				TunnelCreationResponse requestedTunnel = sharingManager.requestTunnel(wsSession.getPrincipal(),
 						lotSharingRequest);
 				if (!requestedTunnel.getResult().isDone()) {
@@ -129,12 +131,12 @@ public class JoatseWsHandler extends AbstractWebSocketHandler implements WebSock
 				requestedTunnel.getResult().whenComplete((r,e)->{
 					if (e == null && r != null && r.isAccepted()) {
 						Accepted acceptedTunnel = (TunnelCreationResult.Accepted)r;
-						SharedResourceLot jTunnel = acceptedTunnel.getTunnel();
-						wsSession.getAttributes().put("uuid", jTunnel.getUuid());
+						SharedResourceLot sharedResourceLot = acceptedTunnel.getTunnel();
+						wsSession.getAttributes().put("uuid", sharedResourceLot.getUuid());
 						JWSSession jWSSession = wsSessionMap.get(wsSession.getId());
-						if (associateTunnel(jWSSession, jTunnel)) {
+						if (associateSharedResourceLot(jWSSession, sharedResourceLot)) {
 							try {
-								jWSSession.sendMessage((WebSocketMessage<?>) new TextMessage(runningTunnelMessage(jTunnel))).get();
+								jWSSession.sendMessage((WebSocketMessage<?>) new TextMessage(runningTunnelMessage(sharedResourceLot))).get();
 								getStateReference(wsSession).set(State.RUNNING); // Allow to process connections
 							} catch (Exception e1) {
 								log.error("Exception sending text response message: {}", e1, e1);
@@ -205,40 +207,19 @@ public class JoatseWsHandler extends AbstractWebSocketHandler implements WebSock
 	}
 
 
-	private boolean associateTunnel(JWSSession jWSSession, SharedResourceLot tunnel) {
-		jWSSession.setSharedResourceLot(tunnel);
+	private boolean associateSharedResourceLot(JWSSession jWSSession, SharedResourceLot srl) {
+		jWSSession.setSharedResourceLot(srl);
 		try {
 			/*
 			 * This is for http(S) too, for the final link between proxied connection and
 			 * websocket to target (and from target to http(s) server)
 			 */
-			tunnel.setTcpConnectionConsumer(new BiConsumer<Long, AsynchronousSocketChannel>() {
-				@Override
-				public void accept(Long targetId, AsynchronousSocketChannel t) {
-					log.info("Connection arrived from {} for tunnel {}.{} !!", IOTools.runUnchecked(()->t.getRemoteAddress()), tunnel.getUuid(), targetId);
-					TcpTunnel tcpItem = tunnel.getTcpItem(targetId);
-					HttpTunnel httpTunnel = tunnel.getHttpItem(targetId);
-					if (tcpItem == null && httpTunnel == null) {
-						log.error("Unknown targetId: " + targetId);
-						IOTools.runFailable(()->t.close());
-						return;
-					}
-					TunnelTcpConnection c = new TunnelTcpConnection(jWSSession, t, targetId);
-					c.getCloseStatus().thenAccept(remote->{
-						// Connection closed ok
-						if (remote == null) {
-							log.info("TCP tunnel closed");
-						} else if (remote) {
-							log.info("TCP tunnel closed by target side");
-						} else {
-							log.info("TCP tunnel closed by this side");
-						}
-					}).exceptionally(e->{
-						log.error("TCP tunnel closed because of error: {}", e, e);
-						return null;
-					});
-				}
-			});
+			srl.setTcpConnectionConsumer(new SessionTunnelTcpConnectionHandler(jWSSession, srl));
+			/*
+			 * This is for incoming terminal/command connections
+			 */
+			srl.setTerminalSessionHandler(new TerminalSessionHandler(jWSSession, srl));
+			srl.setTargetPublicKeyProvider(()->jWSSession.getTargetPublicKey());
 		} catch (Exception e2) {
 			log.error("Exception processing channel acceptance: {}", e2, e2);
 			return false;
@@ -249,6 +230,7 @@ public class JoatseWsHandler extends AbstractWebSocketHandler implements WebSock
 
 	private CharSequence runningTunnelMessage(SharedResourceLot tunnel) {
 		String cloudPublicHostname = tunnel.getCloudPublicHostname();
+		
 		JSONObject res = new JSONObject();
 		res.put("request", "CONNECTION");
 		res.put("response", "RUNNING");
@@ -262,6 +244,7 @@ public class JoatseWsHandler extends AbstractWebSocketHandler implements WebSock
 			tcpTunnels.add(j);
 		}
 		res.put("tcpTunnels", tcpTunnels);
+
 		Collection<JSONObject> httpTunnels = new ArrayList<>();
 		for (HttpTunnel i: tunnel.getHttpItems()) {
 			JSONObject j = new JSONObject();
@@ -270,6 +253,17 @@ public class JoatseWsHandler extends AbstractWebSocketHandler implements WebSock
 			httpTunnels.add(j);
 		}
 		res.put("httpTunnels", httpTunnels);
+		
+		Collection<JSONObject> commandTunnels = new ArrayList<>();
+		for (CommandTunnel i: tunnel.getCommandItems()) {
+			JSONObject j = new JSONObject();
+			j.put("targetHostname", i.getTargetHostname());
+			j.put("targetPort", i.getTargetPort());
+			j.put("command", new JSONArray(Arrays.asList(i.getCommand())));
+			commandTunnels.add(j);
+		}
+		res.put("commandTunnels", commandTunnels);
+
 		return res.toString();
 	}
 

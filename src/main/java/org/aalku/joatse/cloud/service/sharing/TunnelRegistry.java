@@ -29,7 +29,7 @@ public class TunnelRegistry {
 				.filter(http->http.getListenAddress().equals(reachedAddress))
 				.filter(http -> {
 					SharedResourceLot t = http.getTunnel();
-					if (t.isAuthorizeByHttpUrl()) {
+					if (t.isAutoAuthorizeByHttpUrl()) {
 						return true;
 					} else {
 						return t.getAllowedAddresses().contains(remoteAddress);
@@ -57,6 +57,9 @@ public class TunnelRegistry {
 			Object res = srl.getHttpItem(targetId);
 			if (res == null) {
 				res = srl.getTcpItem(targetId);
+			}
+			if (res == null) {
+				res = srl.getCommandItem(targetId);
 			}
 			return (E) res;
 		}

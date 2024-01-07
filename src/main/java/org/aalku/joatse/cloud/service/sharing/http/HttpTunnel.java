@@ -10,11 +10,12 @@ import org.aalku.joatse.cloud.tools.io.IOTools;
 
 public class HttpTunnel {
 
-	public HttpTunnel(SharedResourceLot tunnel, long targetId, String targetDescription, URL targetURL, boolean unsafe, String listenHostname) {
+	public HttpTunnel(SharedResourceLot tunnel, long targetId, String targetDescription, URL targetURL, boolean unsafe, String listenHostname, boolean hideProxy) {
 		this.tunnel = tunnel;
 		this.targetId = targetId;
 		this.targetDescription = targetDescription;
 		this.targetURL = targetURL;
+		this.hideProxy = hideProxy;
 		this.unsafe = unsafe;
 		this.listenAddress = new ListenAddress(0, listenHostname, null);
 	}
@@ -27,10 +28,12 @@ public class HttpTunnel {
 
 	private final String targetDescription;
 	private final URL targetURL;
+	private final boolean hideProxy;
 
 	private final boolean unsafe;
 
 	private ListenAddress listenAddress;
+
 
 	public ListenAddress getListenAddress() {
 		return listenAddress;
@@ -110,6 +113,10 @@ public class HttpTunnel {
 
 	public UrlRewriteConfig getUrlRewriteConfig() {
 		return urlRewriteConfig;
+	}
+
+	public boolean isHideProxy() {
+		return hideProxy;
 	}
 
 }

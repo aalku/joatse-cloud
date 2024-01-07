@@ -22,6 +22,7 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.Consumer;
 
 import org.aalku.joatse.cloud.config.ListenerConfigurationDetector;
+import org.aalku.joatse.cloud.service.sharing.command.CommandTunnel;
 import org.aalku.joatse.cloud.service.sharing.http.HttpEndpointGenerator;
 import org.aalku.joatse.cloud.service.sharing.http.HttpTunnel;
 import org.aalku.joatse.cloud.service.sharing.request.LotSharingRequest;
@@ -230,24 +231,26 @@ public class SharingManager implements InitializingBean, DisposableBean {
 	}
 
 	private String checkPreconfirmation(PreconfirmedShare saved, LotSharingRequest request) {
-		// TODO autoAuthorizeByHttpUrl
-		LotSharingRequest savedReq;
+		Collection<TunnelRequestItem> items;
 		try {
-			savedReq = LotSharingRequest.fromJson(new JSONObject(saved.getResources()), saved.getRequesterAddress());
+			items = LotSharingRequest.fromJsonSharedResources(new JSONObject(saved.getResources()));
 		} catch (MalformedURLException | JSONException e) {
 			log.warn("Error checking preconfirmation: " + e, e);
 			return "Error checking preconfirmation";
 		}
 		for (InetAddress a : Optional.ofNullable(request.getAllowedAddresses()).orElse(Collections.emptySet())) {
-			if (!savedReq.getAllowedAddresses().contains(a)) {
-				return "AllowedAddress " + a;
+			if (!saved.getAllowedAddresses().contains(a)) {
+				return "AllowedAddress: " + a;
 			}
 		}
 		for (final TunnelRequestItem ir : Optional.ofNullable(request.getItems()).orElse(Collections.emptyList())) {
-			if (!savedReq.getItems().stream().filter(is->is.equals(ir)).findAny().isPresent()) {
-				log.warn("Can't find match for " + ir + ", saved items were " + savedReq.getItems());
-				return "" + ir;
+			if (!items.stream().filter(is->is.equals(ir)).findAny().isPresent()) {
+				log.warn("Can't find match for " + ir + ", saved items were " + items);
+				return "New request item: " + ir;
 			}
+		}
+		if (request.isAutoAuthorizeByHttpUrl() && !saved.isAutoAuthorizeByHttpUrl()) {
+			return "new requisite: autoAuthorizeByHttpUrl";
 		}
 		return null;
 	}
@@ -428,7 +431,7 @@ public class SharingManager implements InitializingBean, DisposableBean {
 			SharedResourceLot srl = ht.getTunnel();
 			/* If not authorized maybe it should be */
 			if (!srl.getAllowedAddresses().contains(remoteAddress) 
-					&& srl.isAuthorizeByHttpUrl()) {
+					&& srl.isAutoAuthorizeByHttpUrl()) {
 				srl.addAllowedAddress(remoteAddress);
 			}
 			return ht;
@@ -441,4 +444,10 @@ public class SharingManager implements InitializingBean, DisposableBean {
 		HttpTunnel res = tunnelRegistry.getTunnel(uuid, httpTunnelId);
 		return res;
 	}
+
+	public CommandTunnel getCommandTunnelById(UUID uuid, long targetId) {
+		CommandTunnel res = tunnelRegistry.getTunnel(uuid, targetId);
+		return res;
+	}
+
 }

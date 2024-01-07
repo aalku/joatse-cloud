@@ -20,6 +20,15 @@ const App = {
 			await this.loadData();
 			return false;
 		},
+		async openCommandTunnel(s, item){
+			console.log("openCommandTunnel", s.uuid, item.targetId);
+			await this.allowMyIP(s, false);
+			let url = new URL("/terminal.html", window.location.href);
+			url.searchParams.set("uuid", s.uuid);
+			url.searchParams.set("targetId", item.targetId);
+			let w = window.open(url, "_blank");
+			w.joatseTitle = `${item.description} - Joatse`;
+		},
 		async loadData() {
 			let sessions;
 	        let pSessions = fetch('/sessions').then(response => response.json())
@@ -34,6 +43,10 @@ const App = {
 							s.httpItems = (s.httpItems||[]).map(http=>{
 								http.description = `${http.listenUrl} --> tunnel --> ${http.targetUrl}`;
 								return http;
+							});
+							s.commandItems = (s.commandItems||[]).map(cmd=>{
+								cmd.description = `${[...cmd.command].join(" ")}`;
+								return cmd;
 							});
 							return s;
 						});
@@ -57,8 +70,13 @@ const App = {
 							if (ps.socks5Tunnel) {
 								(ps.tcpTunnels=ps.tunnels||[]).push({targetId:++n, description:"socks5" })
 							}
-							return data.preconfirmedShares;
+							ps.commandTunnels = (ps.commandTunnels||[]).map(cmd=>{
+								cmd.description = `${[...cmd.command].join(" ")}`;
+								cmd.targetId = ++n;
+								return cmd;
+							});
 						}
+						return data.preconfirmedShares;
 					});
 			await pSessions;
 			await pPreconfirmedShares;

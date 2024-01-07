@@ -5,6 +5,7 @@ import java.net.InetSocketAddress;
 import java.net.UnknownHostException;
 import java.util.Collection;
 import java.util.LinkedHashSet;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -40,6 +41,9 @@ public class PreconfirmedShare {
 	@ElementCollection(fetch = FetchType.EAGER)
 	private Set<String> allowedAddresses;
 
+	@Column(name = "autoAuthorizeByHttpUrl")
+	private Boolean autoAuthorizeByHttpUrl = false;
+	
 	public UUID getUuid() {
 		return uuid;
 	}
@@ -99,6 +103,15 @@ public class PreconfirmedShare {
 				o.getRequesterAddress().getAddress().getHostAddress() + ":" + o.getRequesterAddress().getPort());
 		// Don't save those from o, different meaning
 		x.setAllowedAddresses(new LinkedHashSet<>());
+		x.setAutoAuthorizeByHttpUrl(o.isAutoAuthorizeByHttpUrl());
 		return x;
+	}
+
+	public boolean isAutoAuthorizeByHttpUrl() {
+		return Optional.ofNullable(autoAuthorizeByHttpUrl).orElse(false);
+	}
+
+	public void setAutoAuthorizeByHttpUrl(boolean autoAuthorizeByHttpUrl) {
+		this.autoAuthorizeByHttpUrl = autoAuthorizeByHttpUrl;
 	}
 }

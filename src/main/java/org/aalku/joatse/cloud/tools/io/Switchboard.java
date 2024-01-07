@@ -103,7 +103,7 @@ public class Switchboard implements InitializingBean, DisposableBean, Consumer<E
 							log.info("Switchboard proxy is ready: {}.{}", uuid, targetId);
 							sharingManager.switchboardConnectionReady(context, channel);
 						} catch (Exception e1) {
-							reportErrorThenClose(channel, 2, e1.toString());
+							log.info("Switchboard error - {}.{}: {}", uuid, targetId, e1);
 						}
 					}).exceptionally(e->null);
 				} catch (Exception e1) {

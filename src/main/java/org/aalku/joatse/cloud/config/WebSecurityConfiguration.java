@@ -69,9 +69,16 @@ public class WebSecurityConfiguration {
 	 */
 	@Bean
 	SecurityFilterChain filterChain(HttpSecurity http, JWTAuthorizationFilter jwtAuthorizationFilter) throws Exception {
-        http.csrf(csrf -> csrf.disable())
+		http.headers(headers -> {
+			headers.httpStrictTransportSecurity(sts -> {
+				// Subdomains should be able to have different settings
+				sts.includeSubDomains(false).maxAgeInSeconds(60 * 60 * 24);
+			});
+		});
+
+		http.csrf(csrf -> csrf.disable())
                 .addFilterBefore(jwtAuthorizationFilter, UsernamePasswordAuthenticationFilter.class)
-                .authorizeHttpRequests(t -> t.requestMatchers(WebSocketConfig.CONNECTION_HTTP_PATH).anonymous()
+                .authorizeHttpRequests(t -> t.requestMatchers(WebSocketConfig.JOATSE_CONNECTION_HTTP_PATH).anonymous()
 				//
                 .requestMatchers(HttpMethod.GET, PATH_PUBLIC).permitAll()
                 .requestMatchers(HttpMethod.GET, "/login.html", "/css/**", "/header.js", "/lib/*.js").permitAll()

@@ -10,12 +10,14 @@ public class TunnelRequestHttpItem extends TunnelRequestItem {
 	private final URL targetUrl;
 	private final boolean unsafe; // Allow unsafe https
 	private final AtomicReference<String> listenHostname;
+	private final boolean hideProxy;
 	
-	public TunnelRequestHttpItem(long targetId, String targetDescription, URL targetUrl, boolean unsafe, Optional<String> listenHostname) {
+	public TunnelRequestHttpItem(long targetId, String targetDescription, URL targetUrl, boolean unsafe, Optional<String> listenHostname, boolean hideProxy) {
 		super(targetId, targetDescription, targetUrl.getHost(),
 				Optional.of(targetUrl.getPort()).map(p -> p <= 0 ? targetUrl.getDefaultPort() : p).get());
 		this.targetUrl = targetUrl;
 		this.unsafe = unsafe;
+		this.hideProxy = hideProxy;
 		this.listenHostname = new AtomicReference<>(listenHostname.orElse(null));
 	}
 	
@@ -69,6 +71,10 @@ public class TunnelRequestHttpItem extends TunnelRequestItem {
 	
 	public void setListenHostname(String value) {
 		listenHostname.set(value);
+	}
+
+	public boolean isHideProxy() {
+		return hideProxy;
 	}
 	
 }

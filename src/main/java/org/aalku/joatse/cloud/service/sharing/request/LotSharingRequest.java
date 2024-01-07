@@ -12,6 +12,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.stream.Collectors;
 
 import org.aalku.joatse.cloud.service.sharing.SharingManager.TunnelCreationResult;
 import org.json.JSONArray;
@@ -60,43 +61,80 @@ public class LotSharingRequest {
 		return items;
 	}
 
-	public static LotSharingRequest fromJson(JSONObject js, InetSocketAddress connectionRequesterAddress) throws MalformedURLException {
-		Collection<TunnelRequestTcpItem> tcpTunnelReqs = new ArrayList<TunnelRequestTcpItem>();
-		for (Object o: Optional.ofNullable(js.optJSONArray("tcpTunnels")).orElseGet(()->new JSONArray())) {
+	public static LotSharingRequest fromJsonRequest(JSONObject js, InetSocketAddress connectionRequesterAddress) throws MalformedURLException {
+		final UUID preconfirmedUuid = Optional.ofNullable(js.optString("preconfirmed")).filter(s->!s.isEmpty()).map(s->UUID.fromString(s)).orElse(null);
+		final boolean autoAuthorizeByHttpUrl = js.optBoolean("autoAuthorizeByHttpUrl", false);
+
+		Collection<TunnelRequestItem> items = fromJsonSharedResources(js);
+		LotSharingRequest lotSharingRequest = new LotSharingRequest(connectionRequesterAddress, items, autoAuthorizeByHttpUrl, preconfirmedUuid);
+
+		// TODO allowed addresses from json
+		return lotSharingRequest;
+	}
+
+	public static Collection<TunnelRequestItem> fromJsonSharedResources(JSONObject js) throws MalformedURLException {
+		Collection<TunnelRequestTcpItem> tcpTunnelReqs = fromJsonTcpTunnels(js);		
+		Collection<TunnelRequestHttpItem> httpTunnelReqs = fromJsonHttpTunnels(js);		
+		Optional<TunnelRequestTcpItem> socks5TunnelReq = fromJsonSocks5Tunnel(js);
+		Collection<TunnelRequestCommandItem> commandTunnelReqs = fromJsonCommandTunnels(js);		
+		
+		Collection<TunnelRequestItem> items = new ArrayList<TunnelRequestItem>();
+		socks5TunnelReq.ifPresent(x->items.add(x));
+		items.addAll(tcpTunnelReqs);
+		items.addAll(httpTunnelReqs);
+		items.addAll(commandTunnelReqs);
+		return items;
+	}
+
+	private static Collection<TunnelRequestCommandItem> fromJsonCommandTunnels(JSONObject js) {
+		Collection<TunnelRequestCommandItem> items = new ArrayList<>();
+		for (Object o: Optional.ofNullable(js.optJSONArray("commandTunnels")).orElseGet(()->new JSONArray())) {
 			JSONObject jo = (JSONObject) o;
 			long targetId = jo.optLong("targetId");
 			String targetDescription = jo.optString("targetDescription");
-			String targetHostname = jo.optString("targetHostname");
+			String targetHostname = jo.getString("targetHostname");
 			int targetPort = jo.getInt("targetPort");
-			tcpTunnelReqs.add(new TunnelRequestTcpItem(targetId, targetDescription, targetHostname, targetPort));
+			String targetUser = jo.getString("targetUser");
+			String[] command = jo.getJSONArray("command").toList().stream().map(x->x.toString()).collect(Collectors.toList()).toArray(new String[0]);
+			items.add(new TunnelRequestCommandItem(targetId, targetDescription, targetHostname, targetPort, targetUser, command));
 		}
-		
-		Collection<TunnelRequestHttpItem> httpTunnelReqs = new ArrayList<TunnelRequestHttpItem>();
+		return items;
+	}
+
+	private static Optional<TunnelRequestTcpItem> fromJsonSocks5Tunnel(JSONObject js) {
+		Optional<TunnelRequestTcpItem> item = Optional.ofNullable(js.optJSONArray("socks5Tunnel")).map(a->{
+			JSONObject jo = a.getJSONObject(0);
+			long targetId = jo.optLong("targetId");
+			return new TunnelRequestTcpItem(targetId, "socks5", "socks5", 0);
+		});
+		return item;
+	}
+
+	private static Collection<TunnelRequestHttpItem> fromJsonHttpTunnels(JSONObject js) throws MalformedURLException {
+		Collection<TunnelRequestHttpItem> items = new ArrayList<>();
 		for (Object o: Optional.ofNullable(js.optJSONArray("httpTunnels")).orElseGet(()->new JSONArray())) {
 			JSONObject jo = (JSONObject) o;
 			long targetId = jo.optLong("targetId");
 			String targetDescription = jo.optString("targetDescription");
 			URL targetUrl = new URL(jo.optString("targetUrl"));
 			boolean unsafe = jo.optBoolean("unsafe", false);
-			httpTunnelReqs.add(new TunnelRequestHttpItem(targetId, targetDescription, targetUrl, unsafe, Optional.empty())); // TODO
+			boolean hideProxy = jo.optBoolean("hideProxy", false);
+			items.add(new TunnelRequestHttpItem(targetId, targetDescription, targetUrl, unsafe, Optional.empty(), hideProxy)); // TODO
 		}
-		
-		Optional.ofNullable(js.optJSONArray("socks5Tunnel")).ifPresent(a->{
-			JSONObject jo = a.getJSONObject(0);
-			long targetId = jo.optLong("targetId");
-			tcpTunnelReqs.add(new TunnelRequestTcpItem(targetId, "socks5", "socks5", 0));
-		});
-		
-		Collection<TunnelRequestItem> items = new ArrayList<TunnelRequestItem>();
-		items.addAll(tcpTunnelReqs);
-		items.addAll(httpTunnelReqs);
-		
-		final UUID preconfirmedUuid = Optional.ofNullable(js.optString("preconfirmed")).filter(s->!s.isEmpty()).map(s->UUID.fromString(s)).orElse(null);
-		final boolean autoAuthorizeByHttpUrl = js.optBoolean("autoAuthorizeByHttpUrl", false);
-		LotSharingRequest lotSharingRequest = new LotSharingRequest(connectionRequesterAddress, items, autoAuthorizeByHttpUrl, preconfirmedUuid);
+		return items;
+	}
 
-		// TODO allowed addresses from json
-		return lotSharingRequest;
+	private static Collection<TunnelRequestTcpItem> fromJsonTcpTunnels(JSONObject js) {
+		Collection<TunnelRequestTcpItem> items = new ArrayList<>();
+		for (Object o: Optional.ofNullable(js.optJSONArray("tcpTunnels")).orElseGet(()->new JSONArray())) {
+			JSONObject jo = (JSONObject) o;
+			long targetId = jo.optLong("targetId");
+			String targetDescription = jo.optString("targetDescription");
+			String targetHostname = jo.optString("targetHostname");
+			int targetPort = jo.getInt("targetPort");
+			items.add(new TunnelRequestTcpItem(targetId, targetDescription, targetHostname, targetPort));
+		}
+		return items;
 	}
 
 	public UUID getPreconfirmedUuid() {

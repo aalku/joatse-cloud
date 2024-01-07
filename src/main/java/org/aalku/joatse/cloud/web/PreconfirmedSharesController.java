@@ -77,7 +77,12 @@ public class PreconfirmedSharesController {
 				.orElse((Predicate<PreconfirmedShare>) x -> true);
 		Collection<PreconfirmedShare> lots = repository.findByOwner(userManager.getAuthenticatedUser().orElseThrow());
 		res.put("preconfirmedShares", new JSONArray(lots.stream().filter(filter)
-				.map(l -> new JSONObject(l.getResources()).put("uuid", l.getUuid())).collect(Collectors.toList())));
+				.map(l -> {
+					JSONObject js = new JSONObject(l.getResources());
+					js.put("uuid", l.getUuid());
+					js.put("autoAuthorizeByHttpUrl", l.isAutoAuthorizeByHttpUrl());
+					return js;
+				}).collect(Collectors.toList())));
 		return res.toString(0);
 	}
 

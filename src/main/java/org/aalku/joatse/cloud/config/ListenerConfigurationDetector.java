@@ -20,11 +20,15 @@ public class ListenerConfigurationDetector implements InitializingBean {
 	private Integer serverPort;
 	@Value("${server.hostname.public:}")
 	private String publicHostname;
+	@Value("${cloud.tcp.tunnel.host:}")
+	private String publicHostnameTcp;
 
 	/**
 	 * publicHostname was get automatically because no manual publicHostname selected
 	 */
 	private boolean autoHostname;
+
+	private boolean autoHostnameTcp;
 	
 	@Override
 	public void afterPropertiesSet() throws Exception {
@@ -44,6 +48,10 @@ public class ListenerConfigurationDetector implements InitializingBean {
 			throw new Exception(
 					"You must configure 'server.hostname.public' as the public hostname to tell the users to connect to.");
 		}
+		if (publicHostnameTcp == null || publicHostnameTcp.isBlank()) {
+			publicHostnameTcp = publicHostname; // We don't know if we could use a subdomain
+			autoHostnameTcp = true;
+		}
 	}
 	
 	@EventListener(ApplicationReadyEvent.class)
@@ -52,6 +60,11 @@ public class ListenerConfigurationDetector implements InitializingBean {
 			log.warn(
 					"The 'server.hostname.public' is not defined. This system will use the autodetected name '{}' but you probably should configure it.",
 					publicHostname);
+		}
+		if (autoHostnameTcp) {
+			log.warn(
+					"The 'cloud.tcp.tunnel.host' is not defined. This system will use the autodetected name '{}' but you probably should configure it. The best choice would be a subdomain of '{}'",
+					publicHostnameTcp, publicHostname);
 		}
 		if (!sslEnabled) {
 			log.warn("You should configure SSL: server.ssl.enabled=true");
@@ -70,6 +83,10 @@ public class ListenerConfigurationDetector implements InitializingBean {
 
 	public String getPublicHostname() {
 		return publicHostname;
+	}
+
+	public Object getPublicHostnameTcp() {
+		return publicHostnameTcp;
 	}
 
 	public Integer getServerPort() {

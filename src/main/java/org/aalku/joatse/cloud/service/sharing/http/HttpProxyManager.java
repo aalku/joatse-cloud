@@ -325,7 +325,7 @@ public class HttpProxyManager implements InitializingBean, DisposableBean {
 							servletRequest.getRequestURL(), httpTunnel.getTargetId());
 					request.setAttribute(REQUEST_KEY_HTTPTUNNEL, httpTunnel);
 					request.setAttribute(REQUEST_KEY_REWRITE_HEADERS, true); // TODO
-					request.setAttribute(REQUEST_KEY_HIDE_PROXY, true); // TODO
+					request.setAttribute(REQUEST_KEY_HIDE_PROXY, httpTunnel.isHideProxy());
 					super.service(request, response);
 				} else {
 					log.warn("Request {} {} rejected: Unknown tunnel or unauthorized address",
@@ -452,6 +452,9 @@ public class HttpProxyManager implements InitializingBean, DisposableBean {
 				client.setStopAtShutdown(false); // <- Prevents GC
 				client.setConnectTimeout(10000);
 				client.setStopTimeout(5000);
+				client.setMaxBinaryMessageSize(1024*1024);
+				client.setMaxTextMessageSize(1024*1024);
+				client.setMaxFrameSize(1024*1024);
 				client.start();
 			} catch (Exception e) {
 				throw new ServletException("Error starting WebSocket client", e);

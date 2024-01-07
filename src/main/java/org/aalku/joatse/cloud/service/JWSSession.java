@@ -31,7 +31,7 @@ public class JWSSession {
 	private Logger log = LoggerFactory.getLogger(JWSSession.class);
 
 	private ReentrantLock lock = new ReentrantLock();
-	private Map<Long, TunnelTcpConnection> tcpConnectionMap = new LinkedHashMap<>();
+	private Map<Long, AbstractToSocketConnection> socketConnectionMap = new LinkedHashMap<>();
 	private WebSocketSendWorker wsSendWorker;
 
 	/**
@@ -51,7 +51,9 @@ public class JWSSession {
 	private TwoWayBandwithCalculator bandwithCalculator = new TwoWayBandwithCalculator();
 
 	private final SessionPingHandler sessionPingHandler = new SessionPingHandler();
-	
+
+	private CompletableFuture<byte[]> targetPublicKey = null;
+
 	/** Ping stats and sending, but it's scheduled from the outside */
 	public class SessionPingHandler {
 		private AtomicLong lastPingNanoTime = new AtomicLong(0);
@@ -98,7 +100,7 @@ public class JWSSession {
 		this.wsSendWorker = new WebSocketSendWorker(session);
 		this.setBandwithLimiter(bandwithLimitManager.getGlobalBandwithLimiter());
 		this.closer = (BiConsumer<String, Throwable>)(closeReason, e)->{
-			// TODO Do something with e?
+			log.error("Session is being closed. Reason={}, Error={}", closeReason, e, e);
 			lock.lock();
 			try {
 				if(session.isOpen()) {
@@ -114,8 +116,8 @@ public class JWSSession {
 				 * We need a copy since c.close() will update the map and we cannot iterate the
 				 * map at the same time.
 				 */
-				ArrayList<TunnelTcpConnection> copy = new ArrayList<TunnelTcpConnection>(tcpConnectionMap.values());
-				for (TunnelTcpConnection c: copy) {
+				ArrayList<AbstractToSocketConnection> copy = new ArrayList<>(socketConnectionMap.values());
+				for (AbstractToSocketConnection c: copy) {
 					lock.unlock(); // Unlock while closing it so we don't share the lock with anyone else
 					try {
 						c.close(e, false);
@@ -137,10 +139,10 @@ public class JWSSession {
 		this.wsSendWorker.setBandwithCalculator(bandwithCalculator.getOneWayOut());
 	}
 
-	void addTunnelConnection(TunnelTcpConnection c) {
+	void addTunnelConnection(AbstractToSocketConnection c) {
 		lock.lock();
 		try {
-			tcpConnectionMap.put(c.socketId, c);
+			socketConnectionMap.put(c.socketId, c);
 		} finally {
 			lock.unlock();
 		}
@@ -151,14 +153,16 @@ public class JWSSession {
 	}
 	
 	public void close(String reason, Throwable e) {
+		Optional.ofNullable(targetPublicKey)
+				.ifPresent(x -> x.completeExceptionally(new IOException("Closing session", e)));
 		closer.accept(reason, e);
 	}
 
-	void remove(TunnelTcpConnection c) {
+	void remove(AbstractToSocketConnection abstractToSocketConnection) {
 		lock.lock();
 		try {
-			tcpConnectionMap.remove(c.socketId, c);
-			c.assertClosed();
+			socketConnectionMap.remove(abstractToSocketConnection.socketId, abstractToSocketConnection);
+			abstractToSocketConnection.assertClosed();
 		} finally {
 			lock.unlock();
 		}
@@ -173,17 +177,31 @@ public class JWSSession {
 				throw new IOException("Unsupported BinaryMessage protocol version: " + version);
 			}
 			byte type = buffer.get();
-			if (TunnelTcpConnection.messageTypesHandled.contains(type)) {
-				long socketId = buffer.getLong();
-				Runnable runWithoutLock = null; 
-				TunnelTcpConnection c = null;
+			if (type == AbstractToSocketConnection.MESSAGE_PUBLIC_KEY) {
+				byte[] key = new byte[buffer.remaining()];
+				buffer.get(key);
 				lock.lock();
 				try {
-					c = tcpConnectionMap.get(socketId);
+					if (targetPublicKey == null) {
+						throw new IllegalStateException("targetPublicKey received unexpectedly");
+					} else if (targetPublicKey.isDone() && !targetPublicKey.isCompletedExceptionally()) {
+						throw new IllegalStateException("targetPublicKey received twice or unexpectedly");
+					}
+					targetPublicKey.complete(key);
+				} finally {
+					lock.unlock();
+				}
+			} else if (AbstractToSocketConnection.messageTypesHandled.contains(type)) {
+				long socketId = buffer.getLong();
+				Runnable runWithoutLock = null; 
+				AbstractToSocketConnection c = null;
+				lock.lock();
+				try {
+					c = socketConnectionMap.get(socketId);
 					if (c == null) {
 						log.warn("Received ws data relating a tcp connection that was disconnected: {}", socketId);
 					}
-					runWithoutLock = c.receivedMessage(buffer, type); // blocking with lock is ok
+					runWithoutLock = c.receivedMessageFromTarget(buffer, type); // blocking with lock is ok
 				} catch (Exception e) {
 					if (c != null) {
 						log.warn("Error handling tcp data: " + e, e);
@@ -246,6 +264,26 @@ public class JWSSession {
 
 	public OneWayTraffic getTrafficOut() {
 		return bandwithCalculator.getTrafficOut();
+	}
+
+	public CompletableFuture<byte[]> getTargetPublicKey() {
+		lock.lock();
+		try {
+			if (targetPublicKey == null) {
+				targetPublicKey = new CompletableFuture<byte[]>();
+				ByteBuffer buffer = ByteBuffer.allocate(2);
+				buffer.put(AbstractToSocketConnection.PROTOCOL_VERSION);
+				buffer.put(AbstractToSocketConnection.MESSAGE_PUBLIC_KEY);
+				buffer.flip();
+				sendMessage(new BinaryMessage(buffer)).exceptionally(e->{
+					targetPublicKey.completeExceptionally(new IOException("Can't send message asking for public key", e));
+					return null;
+				});
+			}
+			return targetPublicKey.orTimeout(1, TimeUnit.MINUTES);
+		} finally {
+			lock.unlock();
+		}
 	}
 	
 	

@@ -17,7 +17,7 @@ class JsonCompat {
 		String msgReq = "{\"request\":\"CONNECTION\",\"httpTunnels\":[{\"targetId\":1697625924213610922,\"targetDescription\":\"Mast\",\"unsafe\":\"false\",\"targetUrl\":\"https://somehost/\"},{\"targetId\":9218226553367314264,\"targetDescription\":\"someName\",\"unsafe\":\"true\",\"targetUrl\":\"https://127.0.0.1:8443/somepath/\"}],\"socks5Tunnel\":[{\"targetId\":2923020727285153231}],\"tcpTunnels\":[{\"targetId\":1618111220495145852,\"targetDescription\":\"someTarget\",\"targetHostname\":\"someHost\",\"targetPort\":22}]}";
 //		System.out.println(msgReq);
 		JSONObject js = new JSONObject(msgReq);
-		LotSharingRequest lotSharingRequest = LotSharingRequest.fromJson(js, new InetSocketAddress("localhost", 1025));
+		LotSharingRequest lotSharingRequest = LotSharingRequest.fromJsonRequest(js, new InetSocketAddress("localhost", 1025));
 		js.remove("request");
 		js.getJSONArray("httpTunnels").forEach((Object o)->{
 			((JSONObject)o).remove("targetId");

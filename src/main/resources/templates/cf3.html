@@ -34,21 +34,31 @@
 				<input class="form-control" type="text" id="creationTime" th:value="*{creationTime}"
 					disabled="disabled" />
 			</div>
+			<div class="form-group">
+				<label for="autoAuthorizeByHttpUrl">Auto authorize by HTTP URL</label>
+				<input class="form-control" type="text" id="autoAuthorizeByHttpUrl" th:value="*{autoAuthorizeByHttpUrl}"
+					disabled="disabled" />
+			</div>
 			<div class="form-group" th:each="item,it: ${tunnelRequest.items}">
 				<h4 th:if="${tunnelRequest.items.size > 1}" th:text="|Tunnel item ${it.index + 1}|"></h4>
-				<div class="form-group" th:if="${item.targetDescription != null && !item.targetDescription.isEmpty()}">
+				<div class="form-group" th:if="${item.targetDescription != null and !item.targetDescription.isEmpty()}">
 					<label for="targetDescription">Target description</label>
 					<input class="form-control" type="text" id="targetDescription" th:value="${item.targetDescription}"
 						disabled="disabled" />
 				</div>
-				<div class="form-group">
+				<div class="form-group" th:if="${item.targetHostname}">
 					<label for="targetHostname">Target host</label>
 					<input class="form-control" type="text" id="targetHostname" th:value="${item.targetHostname}"
 						disabled="disabled" />
 				</div>
-				<div class="form-group">
+				<div class="form-group" th:if="${item.targetPort} != null and ${item.targetPort} >= 0">
 					<label for="targetPort">Target port</label>
 					<input class="form-control" type="text" id="targetPort" th:value="${item.targetPort}"
+						disabled="disabled" />
+				</div>
+				<div class="form-group" th:if="${item instanceof T(org.aalku.joatse.cloud.service.sharing.request.TunnelRequestCommandItem)}">
+					<label for="command">Command</label>
+					<input class="form-control" type="text" id="command" th:value="${#strings.arrayJoin(item.command, ' ')}"
 						disabled="disabled" />
 				</div>
 			</div>
