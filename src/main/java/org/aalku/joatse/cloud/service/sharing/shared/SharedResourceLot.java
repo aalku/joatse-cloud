@@ -28,6 +28,7 @@ import org.aalku.joatse.cloud.service.sharing.request.TunnelRequestCommandItem;
 import org.aalku.joatse.cloud.service.sharing.request.TunnelRequestHttpItem;
 import org.aalku.joatse.cloud.service.sharing.request.TunnelRequestTcpItem;
 import org.aalku.joatse.cloud.service.user.vo.JoatseUser;
+import org.aalku.joatse.cloud.tools.net.AddressRange;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -38,7 +39,7 @@ public class SharedResourceLot {
 	private final JoatseUser owner;
 	private final UUID uuid;
 	private final String cloudPublicHostname;
-	private Collection<InetAddress> allowedAddresses;
+	private Collection<AddressRange> allowedAddressRanges;
 	private final InetSocketAddress requesterAddress;
 	private final Instant creationTime;
 	/**
@@ -57,7 +58,8 @@ public class SharedResourceLot {
 		this.uuid = request.getUuid();
 		this.cloudPublicHostname = cloudPublicHostname;
 		this.requesterAddress = request.getRequesterAddress();
-		this.allowedAddresses = request.getAllowedAddresses();
+		// Copy AddressRange collection from request
+		this.allowedAddressRanges = new ArrayList<>(request.getAllowedAddressRanges());
 		this.creationTime = request.getCreationTime();
 		
 		List<TunnelRequestTcpItem> rItems = request.getItems().stream().filter(x -> x instanceof TunnelRequestTcpItem)
@@ -88,16 +90,49 @@ public class SharedResourceLot {
 		this.tcpConnectionListener = tcpConnectionListener;
 	}
 	
-	public Collection<InetAddress> getAllowedAddresses() {
-		synchronized (allowedAddresses) {
-			return new LinkedHashSet<>(allowedAddresses);
+	public Collection<AddressRange> getAllowedAddressRanges() {
+		synchronized (allowedAddressRanges) {
+			return new ArrayList<>(allowedAddressRanges);
 		}
 	}
 	
-	public void addAllowedAddress(InetAddress ip) {
-		synchronized (allowedAddresses) {
-			allowedAddresses.add(ip);
+	public void addAllowedAddressRange(AddressRange addressRange) {
+		synchronized (allowedAddressRanges) {
+			allowedAddressRanges.add(addressRange);
 		}		
+	}
+	
+	public void setAllowedAddressRanges(Collection<AddressRange> addressRanges) {
+		synchronized (allowedAddressRanges) {
+			this.allowedAddressRanges.clear();
+			if (addressRanges != null) {
+				this.allowedAddressRanges.addAll(addressRanges);
+			}
+		}
+	}
+	
+	// Backward compatibility method - converts AddressRange back to InetAddress where possible
+	@Deprecated
+	public Collection<InetAddress> getAllowedAddresses() {
+		synchronized (allowedAddressRanges) {
+			return allowedAddressRanges.stream()
+				.filter(AddressRange::isExact) // Only exact IPs can be converted back to InetAddress
+				.map(range -> {
+					try {
+						return InetAddress.getByName(range.toString());
+					} catch (Exception e) {
+						return null;
+					}
+				})
+				.filter(addr -> addr != null)
+				.collect(Collectors.toCollection(LinkedHashSet::new));
+		}
+	}
+	
+	// Backward compatibility method
+	@Deprecated
+	public void addAllowedAddress(InetAddress ip) {
+		addAllowedAddressRange(AddressRange.of(ip.getHostAddress()));
 	}
 
 	public InetSocketAddress getRequesterAddress() {

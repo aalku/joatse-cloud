@@ -1,0 +1,100 @@
+version: '3.8'
+
+services:
+  # HTTP Echo Service - Target service for tunneling
+  http-echo:
+    build:
+      context: ../../http-echo
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - SERVER_PORT=8080
+    networks:
+      - integration-test-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Joatse Cloud Service with JSON initialization
+  joatse-cloud:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    ports:
+      - "9011:9011"
+      - "9012-9100:9012-9100" # TCP tunnel ports
+      - "9101-9106:9101-9106" # HTTP tunnel ports
+      - "9107-9110:9107-9110" # HTTP unsafe tunnel ports
+    environment:
+      - SERVER_PORT=9011
+      - SERVER_ADDRESS=0.0.0.0
+      - CLOUD_PORT_OPEN_RANGE=9012-9100
+      - CLOUD_HTTP_PORT_RANGE=9101-9106
+      - CLOUD_HTTP_UNSAFE_PORT_RANGE=9107-9110
+      - CLOUD_TCP_TUNNEL_HOST=joatse-cloud
+      - SERVER_HOSTNAME_PUBLIC=joatse-cloud
+      - "SPRING_DATASOURCE_URL=jdbc:sqlite:/tmp/joatse-integration-test.sqlite"
+      - SPRING_JPA_HIBERNATE_DDL_AUTO=create-drop
+      - LOGGING_LEVEL_ORG_SPRINGFRAMEWORK=INFO
+      - LOGGING_LEVEL_ORG_AALKU=DEBUG
+      - SPRING_JPA_SHOW_SQL=true
+      - INITIALIZATION_FILE=/app/data/database-init.json
+      - JOATSE_SECURITY_UNSAFE_STATIC_REMOTE_ADDRESS_AUTHORIZATION=true
+      - LOGGING_LEVEL_ORG_AALKU_JOATSE_CLOUD_SERVICE_SHARING_TUNNELREGISTRY=WARN
+      - LOGGING_LEVEL_ORG_AALKU_JOATSE_CLOUD_SERVICE_SHARING_SHARINGMANAGER=WARN
+      - LOGGING_LEVEL_ORG_AALKU_JOATSE_CLOUD_SERVICE_SHARING_HTTP_HTTPPROXYMANAGER=WARN
+    volumes:
+      - ./test-data/database-init.json:/app/data/database-init.json:ro
+    networks:
+      - integration-test-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9011/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    depends_on:
+      http-echo:
+        condition: service_healthy
+
+  # Joatse Target - Creates preconfirmed tunnel using JSON-initialized share
+  joatse-target:
+    build:
+      context: ../../joatse-target
+      dockerfile: Dockerfile
+    environment:
+      - CLOUD_URL=ws://joatse-cloud:9011/connection
+      - DAEMON_MODE=true
+      - JAVA_OPTS=-Xmx256m -Xms128m -Djava.security.egd=file:/dev/./urandom
+    depends_on:
+      joatse-cloud:
+        condition: service_healthy
+    command: 
+      - "--shareHttp=http://http-echo:8080"
+      - "--cloud.url=ws://joatse-cloud:9011/connection" 
+      - "--daemonMode=true"
+      - "--preconfirmed=550e8400-e29b-41d4-a716-446655440001"
+    networks:
+      - integration-test-network
+    restart: "no"  # Don't restart on failure to detect issues faster
+
+  # Integration Test Runner - Tests the complete tunnel flow
+  integration-test-runner:
+    build:
+      context: ../../http-echo/echo-test-client
+      dockerfile: Dockerfile
+    environment:
+      - SPRING_MAIN_WEB_APPLICATION_TYPE=none
+    volumes:
+      - ./test-script.sh:/app/test-script.sh:ro
+    depends_on:
+      - joatse-target
+    entrypoint: ["/bin/sh", "-c", "sleep 30 && /bin/sh /app/test-script.sh"]
+    networks:
+      - integration-test-network
+
+networks:
+  integration-test-network:
+    driver: bridge

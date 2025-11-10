@@ -11,10 +11,12 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
+
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -22,6 +24,7 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.Consumer;
 
 import org.aalku.joatse.cloud.config.ListenerConfigurationDetector;
+import org.aalku.joatse.cloud.config.SecurityConfigurationProperties;
 import org.aalku.joatse.cloud.service.sharing.command.CommandTunnel;
 import org.aalku.joatse.cloud.service.sharing.http.HttpEndpointGenerator;
 import org.aalku.joatse.cloud.service.sharing.http.HttpTunnel;
@@ -34,6 +37,7 @@ import org.aalku.joatse.cloud.service.user.repository.UserRepository;
 import org.aalku.joatse.cloud.service.user.vo.JoatseUser;
 import org.aalku.joatse.cloud.service.user.vo.PreconfirmedShare;
 import org.aalku.joatse.cloud.tools.io.IOTools;
+import org.aalku.joatse.cloud.tools.net.AddressRange;
 import org.json.JSONException;
 import org.json.JSONObject;
 import org.slf4j.Logger;
@@ -162,10 +166,7 @@ public class SharingManager implements InitializingBean, DisposableBean {
 	 */
 	Map<UUID, LotSharingRequest> tunnelRequestMap = new LinkedHashMap<>();
 
-	/**
-	 * For easier testing of target only. FIXME remove this.
-	 */
-	private String automaticTunnelAcceptance = System.getProperty("automaticTunnelAcceptance");
+
 
 	@Autowired
 	private UserRepository userRepository;
@@ -177,6 +178,9 @@ public class SharingManager implements InitializingBean, DisposableBean {
 	
 	@Autowired
 	private PreconfirmedSharesRepository preconfirmedSharesRepository;
+
+	@Autowired
+	private SecurityConfigurationProperties securityConfig;
 
 	/**
 	 * Requests a connection need. The client user must then confirm it from the ip
@@ -202,10 +206,20 @@ public class SharingManager implements InitializingBean, DisposableBean {
 					.findById(request.getPreconfirmedUuid());
 			if (preconfirmedShareOptional.isPresent()) {
 				PreconfirmedShare saved = preconfirmedShareOptional.get();
+				
+				// Copy allowed address patterns from preconfirmed share to request BEFORE validation
+				if (securityConfig.isUnsafeStaticRemoteAddressAuthorization() && 
+					saved.getAllowedAddressPatterns() != null && !saved.getAllowedAddressPatterns().isEmpty()) {
+					// TODO: In the future, the allowedAddresses should come from the joatse-target request and be validated against the preconfirmed patterns. Currently it's not supported for them to come from the joatse-target process, but it should be.
+					request.setAllowedAddressPatterns(saved.getAllowedAddressPatterns());
+				} else {
+					// Security: Clear allowedAddresses when not using static authorization
+					request.setAllowedAddressPatterns(Collections.emptyList());
+				}
+				
 				// check that they are the same requested resources or less				
 				String preconfirmationError = checkPreconfirmation(saved, request);
 				if (preconfirmationError == null) {
-					request.setAllowedAddresses(new LinkedHashSet<>());
 					acceptTunnelRequest(request.getUuid(), saved.getOwner());
 				} else {
 					rejectConnectionRequest(request.getUuid(), "Asked for resources that were not preconfirmed: " + preconfirmationError);
@@ -214,18 +228,6 @@ public class SharingManager implements InitializingBean, DisposableBean {
 				rejectConnectionRequest(request.getUuid(), "Invalid preconfirmation");
 			}
 			return new TunnelCreationResponse(request.getUuid(), null, request.getFuture());
-		} else if (automaticTunnelAcceptance != null) { // TODO remove this mock
-			new Thread() {
-				public void run() {
-					try {
-						Thread.sleep(500);
-						request.setAllowedAddresses(new LinkedHashSet<>(Arrays.asList(InetAddress.getAllByName("localhost")))); // TODO
-						acceptTunnelRequest(request.getUuid(), userRepository.findByLogin(automaticTunnelAcceptance));
-					} catch (InterruptedException e) {
-					} catch (UnknownHostException e) {
-					}
-				};
-			}.start();
 		}
 		return new TunnelCreationResponse(request.getUuid(), buildConfirmationUri(request), request.getFuture());
 	}
@@ -238,9 +240,25 @@ public class SharingManager implements InitializingBean, DisposableBean {
 			log.warn("Error checking preconfirmation: " + e, e);
 			return "Error checking preconfirmation";
 		}
-		for (InetAddress a : Optional.ofNullable(request.getAllowedAddresses()).orElse(Collections.emptySet())) {
-			if (!saved.getAllowedAddresses().contains(a)) {
-				return "AllowedAddress: " + a;
+		// Check if requester's IP address is allowed by the saved address patterns
+		Set<String> savedPatterns = saved.getAllowedAddressPatterns();
+		if (savedPatterns != null && !savedPatterns.isEmpty()) {
+			InetAddress requesterAddr = request.getRequesterAddress().getAddress();
+			boolean isAllowed = savedPatterns.stream()
+				.map(pattern -> {
+					try {
+						return AddressRange.of(pattern);
+					} catch (IllegalArgumentException e) {
+						log.warn("Invalid saved address pattern '{}': {}", pattern, e.getMessage());
+						return null;
+					}
+				})
+				.filter(Objects::nonNull)
+				.anyMatch(range -> range.matches(requesterAddr));
+			
+			if (!isAllowed) {
+				log.warn("Requester address {} not permitted by preconfirmed patterns: {}", requesterAddr, savedPatterns);
+				return "AllowedAddress mistmatch";
 			}
 		}
 		for (final TunnelRequestItem ir : Optional.ofNullable(request.getItems()).orElse(Collections.emptyList())) {
@@ -425,14 +443,18 @@ public class SharingManager implements InitializingBean, DisposableBean {
 	 * {@link httpClientEndConnectionReady()}
 	 */
 	public HttpTunnel getTunnelForHttpRequest(InetAddress remoteAddress, int serverPort, String serverName, String protocol) {
+		log.warn("DEBUG: getTunnelForHttpRequest called with remoteAddress={}, serverPort={}, serverName={}, protocol={}", 
+				remoteAddress, serverPort, serverName, protocol);
 		List<HttpTunnel> res = tunnelRegistry.findMatchingHttpTunnel(remoteAddress, serverPort, serverName, protocol);
+		log.warn("DEBUG: findMatchingHttpTunnel returned {} tunnels", res.size());
 		if (res.size() > 0) {
 			HttpTunnel ht = res.get(0);
 			SharedResourceLot srl = ht.getTunnel();
 			/* If not authorized maybe it should be */
-			if (!srl.getAllowedAddresses().contains(remoteAddress) 
-					&& srl.isAutoAuthorizeByHttpUrl()) {
-				srl.addAllowedAddress(remoteAddress);
+			boolean isAlreadyAllowed = srl.getAllowedAddressRanges().stream()
+				.anyMatch(range -> range.matches(remoteAddress));
+			if (!isAlreadyAllowed && srl.isAutoAuthorizeByHttpUrl()) {
+				srl.addAllowedAddressRange(AddressRange.of(remoteAddress.getHostAddress()));
 			}
 			return ht;
 		} else {

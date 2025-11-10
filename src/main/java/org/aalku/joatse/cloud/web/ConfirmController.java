@@ -6,7 +6,7 @@ import java.net.UnknownHostException;
 import java.time.Instant;
 import java.util.Arrays;
 import java.util.Collection;
-import java.util.LinkedHashSet;
+
 import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.Stream;
@@ -14,6 +14,7 @@ import java.util.stream.Stream;
 import org.aalku.joatse.cloud.config.WebSecurityConfiguration;
 import org.aalku.joatse.cloud.service.sharing.SharingManager;
 import org.aalku.joatse.cloud.service.sharing.request.LotSharingRequest;
+import org.aalku.joatse.cloud.tools.net.AddressRange;
 import org.aalku.joatse.cloud.service.user.UserManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -115,10 +116,10 @@ public class ConfirmController {
 				.getTunnelRequest(UUID.fromString(hashContainer.hash.replaceFirst("^#+", "")));
 		if (lotSharingRequest != null) {
 			InetAddress address = getRemoteAddresses(request);
-			lotSharingRequest.setAllowedAddresses(new LinkedHashSet<>(Arrays.asList(address)));
+			lotSharingRequest.setAllowedAddressPatterns(Arrays.asList(address.getHostAddress()));
 			model.addAttribute("hash", hashContainer.hash);
 			model.addAttribute("tunnelRequest", lotSharingRequest);
-			model.addAttribute("allowedAddress", formatAllowedAddress(lotSharingRequest.getAllowedAddresses()));
+			model.addAttribute("allowedAddress", formatAllowedAddressRanges(lotSharingRequest.getAllowedAddressRanges()));
 			model.addAttribute("uuid", lotSharingRequest.getUuid().toString());
 		}
 		return "cf3.html";
@@ -143,19 +144,27 @@ public class ConfirmController {
 		return "redirect:/";
 	}
 	
-	private String formatAllowedAddress(Collection<InetAddress> collection) {
+	private String formatAllowedAddressRanges(Collection<AddressRange> ranges) {
 		StringBuilder sb = new StringBuilder();
-		for (InetAddress a: collection) {
+		for (AddressRange range: ranges) {
 			if (sb.length() > 0) {
 				sb.append(", ");
 			}
-			sb.append(a);
-			String allowedHostname = reverseDns(a);
-			sb.append("/").append(allowedHostname);
+			sb.append(range.toString());
+			
+			// For exact IP addresses, try to resolve hostname
+			if (range.isExact()) {
+				Optional<InetAddress> inetOpt = range.toInetAddress();
+				if (inetOpt.isPresent()) {
+					String hostname = reverseDns(inetOpt.get());
+					if (hostname != null && !hostname.equals(inetOpt.get().getHostAddress())) {
+						sb.append("/").append(hostname);
+					}
+				}
+			}
 		}
 		return sb.toString();
 	}
-
 
 	private String reverseDns(InetAddress address) {
 		try {

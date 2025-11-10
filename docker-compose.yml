@@ -1,0 +1,35 @@
+version: '3.8'
+
+# Production Docker Compose for Joatse Cloud
+# For integration tests, see ./integration-tests/docker-compose.yml
+
+services:
+  joatse-cloud:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "9011:9011"
+      - "9012-9100:9012-9100" # TCP tunnel ports
+      - "9101-9106:9101-9106" # HTTP tunnel ports
+      - "9107-9110:9107-9110" # HTTP unsafe tunnel ports
+    environment:
+      - SERVER_PORT=9011
+      - SERVER_ADDRESS=0.0.0.0
+      - CLOUD_PORT_OPEN_RANGE=9012-9100
+      - CLOUD_HTTP_PORT_RANGE=9101-9106
+      - CLOUD_HTTP_UNSAFE_PORT_RANGE=9107-9110
+      - SPRING_DATASOURCE_URL=jdbc:sqlite:/app/data/joatse-cloud.sqlite
+      - LOGGING_LEVEL_ORG_SPRINGFRAMEWORK=WARN
+      - LOGGING_LEVEL_ORG_AALKU=INFO
+      - SPRING_JPA_SHOW_SQL=false
+      # Optional: Set to initialize users/shares from JSON file
+      # - INITIALIZATION_FILE=/app/data/database-init.json
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9011/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3

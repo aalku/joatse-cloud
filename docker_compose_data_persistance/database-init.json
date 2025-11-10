@@ -1,0 +1,33 @@
+{
+  "version": "1.0",
+  "users": [
+    {
+      "login": "developer@example.com",
+      "password": "developer123",
+      "admin": false,
+      "emailConfirmed": true,
+      "applicationUseAllowed": true
+    },
+    {
+      "login": "manager@example.com", 
+      "password": "manager456",
+      "admin": true,
+      "emailConfirmed": true,
+      "applicationUseAllowed": true
+    }
+  ],
+  "preconfirmedShares": [
+    {
+      "ownerLogin": "developer@example.com",
+      "resources": "{\"httpTunnels\":[{\"targetUrl\":\"http://http-echo:8080\"}]}",
+      "allowedAddresses": ["127.0.0.1", "192.168.1.0/24"],
+      "autoAuthorizeByHttpUrl": true
+    },
+    {
+      "ownerLogin": "manager@example.com",
+      "resources": "{\"tcpTunnels\":[{\"targetHostname\":\"localhost\",\"targetPort\":3306}]}",
+      "allowedAddresses": ["192.168.1.100", "192.168.1.101"],
+      "autoAuthorizeByHttpUrl": false
+    }
+  ]
+}

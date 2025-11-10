@@ -11,6 +11,11 @@
 
 <body>
 	<div id="terminalContainer"  style="width:100%; height: 100%;">
+		<div id="fontSizeControl" style="text-align: right;">
+			<button type="button" id="smallFont" onclick="changeFont(false);">-A</button>
+			<button type="button" disabled>A</button>
+			<button type="button" name="largeFont" onclick="changeFont(true);">A+</button>
+		</div>
 		<div id="terminal"></div>
 	</div>
 	
@@ -90,7 +95,8 @@
 		async function sendMessage(d) {
 			return sock.send(JSON.stringify(d));
 		}
-		var term = new Terminal({cols: 80, rows:30, scrollback:0, windowsMode:false});
+		var term = new Terminal({cols: 80, rows:30, scrollback:1000, "buffer-size":10000, windowsMode:false});
+		
 		const fitAddon = new FitAddon.FitAddon();
 		term.loadAddon(fitAddon);
 		term.open(document.getElementById('terminal'));
@@ -156,6 +162,12 @@
 		}
 		if (window.joatseTitle) {
 			document.title = window.joatseTitle;
+		}
+		function changeFont(ev) {
+			let fs = term.options.fontSize;
+			let nfs = ev ? fs + 4 : fs - 4;
+			console.log("changeFont", ev, fs, nfs);
+			term.options.fontSize = nfs;
 		}
 		connect();		
 	</script>

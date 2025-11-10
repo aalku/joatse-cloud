@@ -1,0 +1,37 @@
+{
+  "version": "1.0",
+  "users": [
+    {
+      "login": "integration-tester@example.com",
+      "password": "testPassword123",
+      "emailConfirmed": true,
+      "applicationUseAllowed": true
+    },
+    {
+      "login": "integration-user2@example.com",
+      "password": "userPassword789",
+      "emailConfirmed": true,
+      "applicationUseAllowed": true
+    }
+  ],
+  "preconfirmedShares": [
+    {
+      "preconfirmationId": "550e8400-e29b-41d4-a716-446655440001",
+      "ownerLogin": "integration-tester@example.com",
+      "resources": {
+        "httpTunnels": [
+          {
+            "targetUrl": "http://http-echo:8080",
+            "targetDescription": "http://http-echo:8080",
+            "unsafe": false,
+            "targetId": 0,
+            "targetHostname": "http-echo",
+            "targetPort": 8080
+          }
+        ]
+      },
+      "allowedAddresses": ["*"],
+      "autoAuthorizeByHttpUrl": true
+    }
+  ]
+}

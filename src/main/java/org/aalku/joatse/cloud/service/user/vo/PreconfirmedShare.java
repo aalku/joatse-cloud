@@ -85,13 +85,33 @@ public class PreconfirmedShare {
 	}
 
 	public Set<InetAddress> getAllowedAddresses() {
-		return allowedAddresses == null ? null : allowedAddresses.stream().map(a->{
-			try {
-				return InetAddress.getByName(a);
-			} catch (UnknownHostException e) {
-				throw new RuntimeException(e); // Impossible
-			}
-		}).collect(Collectors.toSet());
+		return allowedAddresses == null ? null : allowedAddresses.stream()
+			.filter(addr -> !isFlexiblePattern(addr)) // Skip flexible patterns that can't be converted to InetAddress
+			.map(a->{
+				try {
+					return InetAddress.getByName(a);
+				} catch (UnknownHostException e) {
+					throw new RuntimeException("Invalid IP address: " + a, e);
+				}
+			}).collect(Collectors.toSet());
+	}
+	
+	/**
+	 * Gets the allowed address patterns as strings (supports flexible patterns like CIDR and wildcards)
+	 */
+	public Set<String> getAllowedAddressPatterns() {
+		return allowedAddresses == null ? null : new LinkedHashSet<>(allowedAddresses);
+	}
+	
+	/**
+	 * Sets the allowed address patterns as strings (supports flexible patterns like CIDR and wildcards)
+	 */
+	public void setAllowedAddressPatterns(Collection<String> addressPatterns) {
+		this.allowedAddresses = addressPatterns == null ? null : new LinkedHashSet<>(addressPatterns);
+	}
+	
+	private boolean isFlexiblePattern(String address) {
+		return "*".equals(address) || address.contains("/");
 	}
 
 	public static PreconfirmedShare fromSharedResourceLot(SharedResourceLot o) {

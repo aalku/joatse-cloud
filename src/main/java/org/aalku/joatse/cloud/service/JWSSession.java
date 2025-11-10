@@ -200,6 +200,7 @@ public class JWSSession {
 					c = socketConnectionMap.get(socketId);
 					if (c == null) {
 						log.warn("Received ws data relating a tcp connection that was disconnected: {}", socketId);
+						return;
 					}
 					runWithoutLock = c.receivedMessageFromTarget(buffer, type); // blocking with lock is ok
 				} catch (Exception e) {

@@ -17,6 +17,7 @@ import java.net.URISyntaxException;
 import java.net.URL;
 import java.net.URLEncoder;
 import java.net.UnknownHostException;
+import java.nio.ByteBuffer;
 import java.nio.CharBuffer;
 import java.nio.charset.Charset;
 import java.util.ArrayList;
@@ -313,7 +314,10 @@ public class HttpProxyManager implements InitializingBean, DisposableBean {
 				int serverPort = request.getServerPort();
 				String serverName = request.getServerName();
 				String scheme = request.getScheme();
+				log.warn("DEBUG: HttpProxyManager.service called - remoteAddress={}, serverPort={}, serverName={}, scheme={}, requestURL={}", 
+						remoteAddress, serverPort, serverName, scheme, servletRequest.getRequestURL());
 				HttpTunnel httpTunnel = sharingManager.getTunnelForHttpRequest(remoteAddress, serverPort, serverName, scheme);
+				log.warn("DEBUG: HttpProxyManager.service found tunnel: {}", httpTunnel != null ? httpTunnel.getTargetId() : "null");
 
 				if (Optional.ofNullable(servletRequest.getHeader("Upgrade")).filter(x->x.equals("websocket")).isPresent()) {
 			        websocketUpgrade(servletRequest, servletResponse, httpTunnel);
@@ -328,7 +332,8 @@ public class HttpProxyManager implements InitializingBean, DisposableBean {
 					request.setAttribute(REQUEST_KEY_HIDE_PROXY, httpTunnel.isHideProxy());
 					super.service(request, response);
 				} else {
-					log.warn("Request {} {} rejected: Unknown tunnel or unauthorized address",
+					log.warn("Request {}:{} {} {} rejected: Unknown tunnel or unauthorized address",
+							servletRequest.getRemoteAddr(), servletRequest.getRemotePort(),
 							servletRequest.getMethod(), servletRequest.getRequestURL());
 					HttpServletResponse hsr = (HttpServletResponse) response;
 					try (PrintWriter pw = new PrintWriter(hsr.getOutputStream())) {
@@ -398,7 +403,13 @@ public class HttpProxyManager implements InitializingBean, DisposableBean {
 						e.printStackTrace();
 					}
 				});
-				// TODO
+				serverSideWsHandler.setBinaryMessageHandler(binaryData->{
+					try {
+						s.getRemote().sendBytes(ByteBuffer.wrap(binaryData));
+					} catch (IOException e) {
+						e.printStackTrace();
+					}
+				});
 			});
 			serverSideWsHandler.getSession().thenAccept(s->{
 				clientSideHandler.setTextMessageHandler(m->{
@@ -409,7 +420,13 @@ public class HttpProxyManager implements InitializingBean, DisposableBean {
 						e.printStackTrace();
 					}
 				});
-				// TODO
+				clientSideHandler.setBinaryMessageHandler(binaryData->{
+					try {
+						s.getRemote().sendBytes(ByteBuffer.wrap(binaryData));
+					} catch (IOException e) {
+						e.printStackTrace();
+					}
+				});
 			});
 			
 			

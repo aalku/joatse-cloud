@@ -11,6 +11,7 @@ import org.aalku.joatse.cloud.service.sharing.http.HttpTunnel;
 import org.aalku.joatse.cloud.service.sharing.http.ListenAddress;
 import org.aalku.joatse.cloud.service.sharing.shared.SharedResourceLot;
 import org.aalku.joatse.cloud.service.sharing.shared.TcpTunnel;
+import org.aalku.joatse.cloud.tools.net.AddressRange;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -24,6 +25,17 @@ public class TunnelRegistry {
 			
 	public synchronized List<HttpTunnel> findMatchingHttpTunnel(InetAddress remoteAddress, int serverPort, String serverName, String protocol) {
 		ListenAddress reachedAddress = new ListenAddress(serverPort, serverName, protocol);
+		log.warn("DEBUG: Looking for HTTP tunnel matching: {}", reachedAddress);
+		
+		List<HttpTunnel> allHttpTunnels = tunnelsByUUID.values().stream()
+				.flatMap(x -> x.getHttpItems().stream())
+				.collect(Collectors.toList());
+		log.warn("DEBUG: Total HTTP tunnels available: {}", allHttpTunnels.size());
+		
+		for (HttpTunnel tunnel : allHttpTunnels) {
+			log.warn("DEBUG: Available tunnel: {} (listenAddress: {})", tunnel.getTargetURL(), tunnel.getListenAddress());
+		}
+		
 		List<HttpTunnel> tunnelsMatching = tunnelsByUUID.values().stream()
 				.flatMap(x -> x.getHttpItems().stream())
 				.filter(http->http.getListenAddress().equals(reachedAddress))
@@ -32,16 +44,21 @@ public class TunnelRegistry {
 					if (t.isAutoAuthorizeByHttpUrl()) {
 						return true;
 					} else {
-						return t.getAllowedAddresses().contains(remoteAddress);
+						// Use flexible IP address matching (supports exact IP, CIDR, and wildcards)
+						return isAddressAllowed(remoteAddress, t);
 					}
 				})
 				.collect(Collectors.toList());
+		log.warn("DEBUG: Matching tunnels found: {}", tunnelsMatching.size());
 		return tunnelsMatching;
 	}
 	
 	public synchronized List<TcpTunnel> findMatchingTcpTunnel(InetAddress remoteAddress, int listenPort) {
 		List<TcpTunnel> tunnelsMatching = tunnelsByUUID.values().stream()
-				.filter(t -> t.getAllowedAddresses().contains(remoteAddress))
+				.filter(t -> {
+					// Use flexible IP address matching (supports exact IP, CIDR, and wildcards)
+					return isAddressAllowed(remoteAddress, t);
+				})
 				.flatMap(x -> x.getTcpItems().stream())
 				.filter(tcp->tcp.getListenPort() == listenPort)
 				.collect(Collectors.toList());
@@ -73,5 +90,19 @@ public class TunnelRegistry {
 		tunnelsByUUID.put(tunnel.getUuid(), tunnel);
 	}
 	
+	/**
+	 * Checks if the given remote address is allowed to access the tunnel.
+	 * Uses AddressRange for flexible IP address matching supporting exact IPs, CIDR notation, and wildcards.
+	 */
+	private boolean isAddressAllowed(InetAddress remoteAddress, SharedResourceLot tunnel) {
+		// Use AddressRange collection for flexible matching
+		if (!tunnel.getAllowedAddressRanges().isEmpty()) {
+			return tunnel.getAllowedAddressRanges().stream()
+				.anyMatch(addressRange -> addressRange.matches(remoteAddress));
+		}
+		
+		// If no address ranges configured, deny access
+		return false;
+	}
 
 }
