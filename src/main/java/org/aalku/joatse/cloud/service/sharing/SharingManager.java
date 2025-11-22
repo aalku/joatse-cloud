@@ -475,7 +475,7 @@ public class SharingManager implements InitializingBean, DisposableBean {
 
 	public FileTunnel getTunnelForFileRequest(InetAddress remoteAddress, int serverPort, String serverName, String protocol, String requestPath) {
 		List<FileTunnel> res = tunnelRegistry.findMatchingFileTunnel(remoteAddress, serverPort, serverName, protocol, requestPath);
-		log.debug("File tunnel lookup for {}:{}{}{}  returned {} result(s)", serverName, serverPort, protocol, requestPath, res.size());
+		log.debug("File tunnel lookup for {}:{} - {} - {}  returned {} result(s)", serverName, serverPort, protocol, requestPath, res.size());
 		if (res.size() > 0) {
 			FileTunnel ft = res.get(0);
 			SharedResourceLot srl = ft.getSharedResourceLot();

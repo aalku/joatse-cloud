@@ -1,6 +1,8 @@
 package org.aalku.joatse.cloud.service.sharing.file;
 
 import java.net.URL;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.util.Optional;
 
 import org.aalku.joatse.cloud.service.sharing.http.ListenAddress;
@@ -51,7 +53,10 @@ public class FileTunnel {
 		}
 		// Extract filename from targetPath
 		String filename = extractFilename(targetPath);
-		return listenAddress.getListenUrl(Optional.of("/" + filename));
+		// URL-encode the filename to handle spaces and special characters
+		String encodedFilename = URLEncoder.encode(filename, StandardCharsets.UTF_8)
+				.replace("+", "%20"); // URLEncoder uses + for spaces, but URLs use %20
+		return listenAddress.getListenUrl(Optional.of("/" + encodedFilename));
 	}
 	
 	private String extractFilename(String path) {

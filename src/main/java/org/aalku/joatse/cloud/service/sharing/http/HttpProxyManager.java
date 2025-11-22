@@ -578,6 +578,7 @@ public class HttpProxyManager implements InitializingBean, DisposableBean {
 						byte[] bytes = new byte[dataBuffer.remaining()];
 						dataBuffer.get(bytes);
 						out.write(bytes);
+						out.flush(); // Flush immediately so browser starts downloading
 						bytesWritten[0] += bytes.length;
 						
 						// Check if we've written enough for range request

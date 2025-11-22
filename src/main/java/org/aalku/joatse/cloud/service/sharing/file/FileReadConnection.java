@@ -284,13 +284,19 @@ public class FileReadConnection extends AbstractToSocketConnection {
 			while (buffer.hasRemaining()) {
 				// Ensure accumulator has space
 				if (!accumulator.hasRemaining()) {
-					// Expand accumulator
-					ByteBuffer newAccumulator = ByteBuffer.allocate(accumulator.capacity() * 2);
+					// Expand accumulator - ensure it's large enough for remaining buffer data
+					int newCapacity = Math.max(accumulator.capacity() * 2, accumulator.position() + buffer.remaining());
+					ByteBuffer newAccumulator = ByteBuffer.allocate(newCapacity);
 					accumulator.flip();
 					newAccumulator.put(accumulator);
 					accumulator = newAccumulator;
 				}
+				// Put only as much as accumulator can hold
+				int bytesToPut = Math.min(buffer.remaining(), accumulator.remaining());
+				int originalLimit = buffer.limit();
+				buffer.limit(buffer.position() + bytesToPut);
 				accumulator.put(buffer);
+				buffer.limit(originalLimit);
 			}
 			
 			// Process accumulated bytes
