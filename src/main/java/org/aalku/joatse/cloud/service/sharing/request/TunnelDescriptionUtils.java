@@ -52,4 +52,25 @@ public class TunnelDescriptionUtils {
                     return "command";
                 });
     }
+    
+    /**
+     * Generate default description for file tunnel if not provided
+     * @param description Provided description (may be null or empty)
+     * @param targetPath Target file path
+     * @return Default description or provided description if not empty
+     */
+    public static String getDefaultFileDescription(String description, String targetPath) {
+        return Optional.ofNullable(description)
+                .filter(s -> !s.isEmpty())
+                .orElseGet(() -> {
+                    if (targetPath != null && !targetPath.isEmpty()) {
+                        int lastSlash = targetPath.lastIndexOf('/');
+                        if (lastSlash >= 0 && lastSlash < targetPath.length() - 1) {
+                            return targetPath.substring(lastSlash + 1);
+                        }
+                        return targetPath;
+                    }
+                    return "file";
+                });
+    }
 }

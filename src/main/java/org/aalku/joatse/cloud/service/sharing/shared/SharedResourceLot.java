@@ -20,21 +20,27 @@ import java.util.stream.Collectors;
 
 import org.aalku.joatse.cloud.service.sharing.command.CommandTunnel;
 import org.aalku.joatse.cloud.service.sharing.command.TerminalSessionHandler;
+import org.aalku.joatse.cloud.service.sharing.file.FileTunnel;
 import org.aalku.joatse.cloud.service.sharing.http.HttpEndpointGenerator;
 import org.aalku.joatse.cloud.service.sharing.http.HttpTunnel;
 import org.aalku.joatse.cloud.service.sharing.http.ListenAddress;
 import org.aalku.joatse.cloud.service.sharing.request.LotSharingRequest;
 import org.aalku.joatse.cloud.service.sharing.request.TunnelRequestCommandItem;
+import org.aalku.joatse.cloud.service.sharing.request.TunnelRequestFileItem;
 import org.aalku.joatse.cloud.service.sharing.request.TunnelRequestHttpItem;
 import org.aalku.joatse.cloud.service.sharing.request.TunnelRequestTcpItem;
 import org.aalku.joatse.cloud.service.user.vo.JoatseUser;
 import org.aalku.joatse.cloud.tools.net.AddressRange;
 import org.json.JSONArray;
 import org.json.JSONObject;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import com.google.common.base.Supplier;
 
 public class SharedResourceLot {
+	
+	private static final Logger log = LoggerFactory.getLogger(SharedResourceLot.class);
 
 	private final JoatseUser owner;
 	private final UUID uuid;
@@ -50,6 +56,7 @@ public class SharedResourceLot {
 	private Collection<TcpTunnel> tcpItems = new ArrayList<>(1);
 	private Collection<HttpTunnel> httpItems = new ArrayList<>(1);
 	private Collection<CommandTunnel> commandItems = new ArrayList<>(1);
+	private Collection<FileTunnel> fileItems = new ArrayList<>(1);
 	private boolean authorizeByHttpUrl;
 	private Supplier<CompletableFuture<byte[]>> targetPublicKeyProvider;
 
@@ -79,6 +86,12 @@ public class SharedResourceLot {
 				.map(x -> (TunnelRequestCommandItem) x).collect(Collectors.toList());
 		for (TunnelRequestCommandItem r: cItems) {
 			this.addCommandItem(r);
+		}
+		
+		List<TunnelRequestFileItem> fItems = request.getItems().stream().filter(x -> x instanceof TunnelRequestFileItem)
+				.map(x -> (TunnelRequestFileItem) x).collect(Collectors.toList());
+		for (TunnelRequestFileItem r: fItems) {
+			this.addFileItem(r);
 		}
 
 		this.authorizeByHttpUrl = request.isAutoAuthorizeByHttpUrl();
@@ -163,6 +176,10 @@ public class SharedResourceLot {
 	private void addCommandItem(TunnelRequestCommandItem r) {
 		commandItems.add(new CommandTunnel(this, r.targetId, r.targetDescription, r.targetHostname, r.targetPort, r.getTargetUser(), r.getCommand()));
 	}
+	
+	private void addFileItem(TunnelRequestFileItem r) {
+		fileItems.add(new FileTunnel(this, r.targetId, r.targetDescription, r.getTargetPath()));
+	}
 
 	public TcpTunnel getTcpItem(long targetId) {
 		return tcpItems.stream().filter(i->i.targetId==targetId).findAny().orElse(null);
@@ -174,6 +191,10 @@ public class SharedResourceLot {
 
 	public CommandTunnel getCommandItem(long targetId) {
 		return getCommandItems().stream().filter(i->i.getTargetId()==targetId).findAny().orElse(null);
+	}
+	
+	public FileTunnel getFileItem(long targetId) {
+		return getFileItems().stream().filter(i->i.getTargetId()==targetId).findAny().orElse(null);
 	}
 	
 	public Collection<TcpTunnel> getTcpItems() {
@@ -190,6 +211,10 @@ public class SharedResourceLot {
 
 	public Collection<CommandTunnel> getCommandItems() {
 		return commandItems;
+	}
+	
+	public Collection<FileTunnel> getFileItems() {
+		return fileItems;
 	}
 	
 	/**
@@ -223,6 +248,17 @@ public class SharedResourceLot {
 					.orElse(null);
 			ListenAddress listenAddress = httpEndpointGenerator.generateListenAddress(i, forbiddenAddresses,
 					askedCloudHostname);
+			i.setListenAddress(listenAddress);
+			forbiddenAddresses.add(listenAddress);
+		});
+	}
+	
+	public void selectFileEndpoints(HttpEndpointGenerator httpEndpointGenerator) {
+		LinkedHashSet<ListenAddress> forbiddenAddresses = new LinkedHashSet<ListenAddress>();
+		fileItems.forEach(i->{
+			ListenAddress listenAddress = httpEndpointGenerator.generateListenAddressForFile(i, forbiddenAddresses);
+			log.debug("Generated ListenAddress for FileTunnel '{}': {}", 
+				i.getTargetDescription(), listenAddress);
 			i.setListenAddress(listenAddress);
 			forbiddenAddresses.add(listenAddress);
 		});

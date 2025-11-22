@@ -101,13 +101,15 @@ public class LotSharingRequest {
 		Collection<TunnelRequestTcpItem> tcpTunnelReqs = fromJsonTcpTunnels(js);		
 		Collection<TunnelRequestHttpItem> httpTunnelReqs = fromJsonHttpTunnels(js);		
 		Optional<TunnelRequestTcpItem> socks5TunnelReq = fromJsonSocks5Tunnel(js);
-		Collection<TunnelRequestCommandItem> commandTunnelReqs = fromJsonCommandTunnels(js);		
+		Collection<TunnelRequestCommandItem> commandTunnelReqs = fromJsonCommandTunnels(js);
+		Collection<TunnelRequestFileItem> fileTunnelReqs = fromJsonFileTunnels(js);
 		
 		Collection<TunnelRequestItem> items = new ArrayList<TunnelRequestItem>();
 		socks5TunnelReq.ifPresent(x->items.add(x));
 		items.addAll(tcpTunnelReqs);
 		items.addAll(httpTunnelReqs);
 		items.addAll(commandTunnelReqs);
+		items.addAll(fileTunnelReqs);
 		return items;
 	}
 
@@ -149,6 +151,20 @@ public class LotSharingRequest {
 			// Generate default description if not provided
 			String finalDescription = TunnelDescriptionUtils.getDefaultHttpDescription(targetDescription, targetUrl);
 			items.add(new TunnelRequestHttpItem(targetId, finalDescription, targetUrl, unsafe, Optional.empty(), hideProxy)); // TODO
+		}
+		return items;
+	}
+
+	private static Collection<TunnelRequestFileItem> fromJsonFileTunnels(JSONObject js) {
+		Collection<TunnelRequestFileItem> items = new ArrayList<>();
+		for (Object o: Optional.ofNullable(js.optJSONArray("fileTunnels")).orElseGet(()->new JSONArray())) {
+			JSONObject jo = (JSONObject) o;
+			long targetId = jo.optLong("targetId");
+			String targetDescription = jo.optString("targetDescription");
+			String targetPath = jo.getString("targetPath");
+			// Generate default description if not provided
+			String finalDescription = TunnelDescriptionUtils.getDefaultFileDescription(targetDescription, targetPath);
+			items.add(new TunnelRequestFileItem(targetId, finalDescription, targetPath));
 		}
 		return items;
 	}

@@ -7,6 +7,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
+import org.aalku.joatse.cloud.service.sharing.file.FileTunnel;
 import org.aalku.joatse.cloud.service.sharing.http.HttpTunnel;
 import org.aalku.joatse.cloud.service.sharing.http.ListenAddress;
 import org.aalku.joatse.cloud.service.sharing.shared.SharedResourceLot;
@@ -25,17 +26,6 @@ public class TunnelRegistry {
 			
 	public synchronized List<HttpTunnel> findMatchingHttpTunnel(InetAddress remoteAddress, int serverPort, String serverName, String protocol) {
 		ListenAddress reachedAddress = new ListenAddress(serverPort, serverName, protocol);
-		log.warn("DEBUG: Looking for HTTP tunnel matching: {}", reachedAddress);
-		
-		List<HttpTunnel> allHttpTunnels = tunnelsByUUID.values().stream()
-				.flatMap(x -> x.getHttpItems().stream())
-				.collect(Collectors.toList());
-		log.warn("DEBUG: Total HTTP tunnels available: {}", allHttpTunnels.size());
-		
-		for (HttpTunnel tunnel : allHttpTunnels) {
-			log.warn("DEBUG: Available tunnel: {} (listenAddress: {})", tunnel.getTargetURL(), tunnel.getListenAddress());
-		}
-		
 		List<HttpTunnel> tunnelsMatching = tunnelsByUUID.values().stream()
 				.flatMap(x -> x.getHttpItems().stream())
 				.filter(http->http.getListenAddress().equals(reachedAddress))
@@ -49,7 +39,7 @@ public class TunnelRegistry {
 					}
 				})
 				.collect(Collectors.toList());
-		log.warn("DEBUG: Matching tunnels found: {}", tunnelsMatching.size());
+		log.debug("Found {} HTTP tunnel(s) matching: {}", tunnelsMatching.size(), reachedAddress);
 		return tunnelsMatching;
 	}
 	
@@ -65,6 +55,43 @@ public class TunnelRegistry {
 		return tunnelsMatching;
 	}
 	
+	public synchronized List<FileTunnel> findMatchingFileTunnel(InetAddress remoteAddress, int serverPort, String serverName, String protocol, String requestPath) {
+		ListenAddress reachedAddress = new ListenAddress(serverPort, serverName, protocol);
+		
+		List<FileTunnel> tunnelsMatching = tunnelsByUUID.values().stream()
+				.flatMap(x -> x.getFileItems().stream())
+				.filter(file->{
+					ListenAddress fileAddress = file.getListenAddress();
+					if (fileAddress == null) {
+						log.warn("FileTunnel has null ListenAddress - targetId={}, targetDescription={}, targetPath={}", 
+							file.getTargetId(), file.getTargetDescription(), file.getTargetPath());
+						return false;
+					}
+					// Check if ListenAddress matches
+					if (!fileAddress.equals(reachedAddress)) {
+						return false;
+					}
+					// Check if request path matches the file's URL path
+					if (requestPath != null && file.getListenUrl() != null) {
+						String filePath = file.getListenUrl().getPath();
+						return requestPath.equals(filePath);
+					}
+					return true;
+				})
+				.filter(file -> {
+					SharedResourceLot t = file.getSharedResourceLot();
+					if (t.isAutoAuthorizeByHttpUrl()) {
+						return true;
+					} else {
+						// Use flexible IP address matching (supports exact IP, CIDR, and wildcards)
+						return isAddressAllowed(remoteAddress, t);
+					}
+				})
+				.collect(Collectors.toList());
+		log.debug("Found {} file tunnel(s) matching: {}", tunnelsMatching.size(), reachedAddress);
+		return tunnelsMatching;
+	}
+	
 	@SuppressWarnings("unchecked")
 	public synchronized <E> E getTunnel(UUID uuid, long targetId) {
 		SharedResourceLot srl = tunnelsByUUID.get(uuid);
@@ -77,6 +104,9 @@ public class TunnelRegistry {
 			}
 			if (res == null) {
 				res = srl.getCommandItem(targetId);
+			}
+			if (res == null) {
+				res = srl.getFileItem(targetId);
 			}
 			return (E) res;
 		}

@@ -187,7 +187,7 @@ public class UserManager {
 	}
 
 	@Bean
-	JoatseUserDetailsManager userDetailsService() {
+	public JoatseUserDetailsManager userDetailsService() {
 		return new JoatseUserDetailsManager() {
 			@Override
 			public UserDetails loadUserByUsername(String username) throws UsernameNotFoundException {

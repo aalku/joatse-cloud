@@ -52,6 +52,22 @@
 								<b-row>
 									<b-col sm="4">
 										<label :for="`s-ai-${s.uuid}`">Allowed IP address</label>
+						<b-container fluid v-if="s.fileItems && s.fileItems.length">
+							<b-row v-for="(f, iff) in s.fileItems" :key="f.targetId">
+								<b-col sm="4">
+									<label :for="`file-s-${f.targetId}`">File share<span v-if="f.targetDescription"> -
+										{{f.targetDescription}}</span></label>
+								</b-col>
+								<b-col sm="8">
+									<b-input-group>
+										<b-form-input :id="`file-s-${f.targetId}`" v-model="f.description" readonly></b-form-input>
+										<b-input-group-append>
+											<b-button variant="outline-secondary" @click="openFileTunnel(s,f)"><b-icon-cloud-download/></b-button>
+										</b-input-group-append>
+									</b-input-group>
+								</b-col>
+							</b-row>
+						</b-container>
 									</b-col>
 									<b-col sm="8">
 										<b-input-group>

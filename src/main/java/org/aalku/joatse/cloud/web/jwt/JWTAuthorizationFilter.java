@@ -47,22 +47,41 @@ public class JWTAuthorizationFilter extends BasicAuthenticationFilter {
 	protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
 			throws IOException, ServletException {
 
-		Optional<Cookie> oCookie = Optional.ofNullable(request.getCookies()).map((Cookie[] a) -> Arrays.asList(a))
-				.orElse(Collections.emptyList()).stream().filter(c -> c.getName().equals(COOKIE_JWT_KEY))
-				.filter(c -> c.getValue().length() > 0).findAny();
-    	if (oCookie.isPresent()) {
-    		Cookie cookie = oCookie.get();
+		String jwtToken = null;
+		
+		// First, check for Bearer token in Authorization header (for REST API)
+		String authHeader = request.getHeader("Authorization");
+		if (authHeader != null && authHeader.startsWith("Bearer ")) {
+			jwtToken = authHeader.substring(7);
+			log.debug("Found JWT token in Authorization header");
+		}
+		
+		// Fallback to JWT cookie (for web UI)
+		if (jwtToken == null) {
+			Optional<Cookie> oCookie = Optional.ofNullable(request.getCookies()).map((Cookie[] a) -> Arrays.asList(a))
+					.orElse(Collections.emptyList()).stream().filter(c -> c.getName().equals(COOKIE_JWT_KEY))
+					.filter(c -> c.getValue().length() > 0).findAny();
+			if (oCookie.isPresent()) {
+				jwtToken = oCookie.get().getValue();
+				log.debug("Found JWT token in cookie");
+			}
+		}
+		
+		// If we have a JWT token (from either source), validate and authenticate
+		if (jwtToken != null) {
 			try {
-				Map<String, Object> tokenDetails = joatseTokenManager.verifyToken(cookie.getValue());
+				Map<String, Object> tokenDetails = joatseTokenManager.verifyToken(jwtToken);
 				if (tokenDetails != null) {
 					JoatseUser user = userManager.loadUserByUUID(UUID.fromString((String)tokenDetails.get(JoatseUser.ATTRIB_KEY_UUID)));
 					UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(user, null, user.getAuthorities());
 					SecurityContextHolder.getContext().setAuthentication(authentication);
+					log.debug("Authenticated user {} via JWT", user.getUsername());
 				}
 			} catch (JwtException e) {
 				log.warn("Exception processing jwt: " + e, e);
 			}
-    	}
+		}
+		
         chain.doFilter(request, response);
     }
 }

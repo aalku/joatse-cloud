@@ -18,6 +18,7 @@ import org.aalku.joatse.cloud.service.sharing.SharingManager.TunnelCreationResul
 import org.aalku.joatse.cloud.service.sharing.SharingManager.TunnelCreationResult.Accepted;
 import org.aalku.joatse.cloud.service.sharing.command.CommandTunnel;
 import org.aalku.joatse.cloud.service.sharing.command.TerminalSessionHandler;
+import org.aalku.joatse.cloud.service.sharing.file.FileTunnel;
 import org.aalku.joatse.cloud.service.sharing.http.HttpTunnel;
 import org.aalku.joatse.cloud.service.sharing.request.LotSharingRequest;
 import org.aalku.joatse.cloud.service.sharing.shared.SharedResourceLot;
@@ -263,6 +264,16 @@ public class JoatseWsHandler extends AbstractWebSocketHandler implements WebSock
 			commandTunnels.add(j);
 		}
 		res.put("commandTunnels", commandTunnels);
+		
+		Collection<JSONObject> fileTunnels = new ArrayList<>();
+		for (FileTunnel i: tunnel.getFileItems()) {
+			JSONObject j = new JSONObject();
+			j.put("listenUrl", i.getListenUrl());
+			j.put("targetPath", i.getTargetPath());
+			j.put("targetDescription", i.getTargetDescription());
+			fileTunnels.add(j);
+		}
+		res.put("fileTunnels", fileTunnels);
 
 		return res.toString();
 	}

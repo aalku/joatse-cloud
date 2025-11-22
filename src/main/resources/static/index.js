@@ -20,6 +20,12 @@ const App = {
 			await this.loadData();
 			return false;
 		},
+		async openFileTunnel(s, f) {
+			await this.allowMyIP(s, false);
+			window.open(f.listenUrl, "_blank");
+			await this.loadData();
+			return false;
+		},
 		async openCommandTunnel(s, item){
 			console.log("openCommandTunnel", s.uuid, item.targetId);
 			await this.allowMyIP(s, false);
@@ -31,7 +37,7 @@ const App = {
 		},
 		async loadData() {
 			let sessions;
-	        let pSessions = fetch('/sessions').then(response => response.json())
+		        let pSessions = fetch('/sessions').then(response => response.json())
         			.then((data) => {
 						sessions = (data.sessions||[]).map(s=>{
 							s.requesterHostname = s.requesterAddress.split(':')[0];
@@ -43,6 +49,10 @@ const App = {
 							s.httpItems = (s.httpItems||[]).map(http=>{
 								http.description = `${http.listenUrl} --> tunnel --> ${http.targetUrl}`;
 								return http;
+							});
+							s.fileItems = (s.fileItems||[]).map(file=>{
+								file.description = `${file.listenUrl} --> tunnel --> ${file.targetPath || file.targetDescription || ''}`.trim();
+								return file;
 							});
 							s.commandItems = (s.commandItems||[]).map(cmd=>{
 								cmd.description = `${[...cmd.command].join(" ")}`;

@@ -26,6 +26,7 @@ import java.util.function.Consumer;
 import org.aalku.joatse.cloud.config.ListenerConfigurationDetector;
 import org.aalku.joatse.cloud.config.SecurityConfigurationProperties;
 import org.aalku.joatse.cloud.service.sharing.command.CommandTunnel;
+import org.aalku.joatse.cloud.service.sharing.file.FileTunnel;
 import org.aalku.joatse.cloud.service.sharing.http.HttpEndpointGenerator;
 import org.aalku.joatse.cloud.service.sharing.http.HttpTunnel;
 import org.aalku.joatse.cloud.service.sharing.request.LotSharingRequest;
@@ -320,11 +321,14 @@ public class SharingManager implements InitializingBean, DisposableBean {
 	private SharedResourceLot buildAndRegisterTunnel(JoatseUser owner, LotSharingRequest request) {
 		if (!lock.writeLock().isHeldByCurrentThread()) {
 			throw new IllegalStateException();
-		}	
+		}
 		SharedResourceLot tunnel = new SharedResourceLot(owner, request, webListenerConfiguration.getPublicHostname());
 		tunnel.selectTcpPorts(tcpOpenPorts);
 		tunnel.selectHttpEndpoints(httpEndpointGenerator);
+		tunnel.selectFileEndpoints(httpEndpointGenerator);
 		tunnelRegistry.registerTunnel(tunnel);
+		log.info("Tunnel registered for request {} with {} HTTP, {} file, {} TCP items", 
+			request.getUuid(), tunnel.getHttpItems().size(), tunnel.getFileItems().size(), tunnel.getTcpItems().size());
 		return tunnel;
 	}
 
@@ -443,10 +447,7 @@ public class SharingManager implements InitializingBean, DisposableBean {
 	 * {@link httpClientEndConnectionReady()}
 	 */
 	public HttpTunnel getTunnelForHttpRequest(InetAddress remoteAddress, int serverPort, String serverName, String protocol) {
-		log.warn("DEBUG: getTunnelForHttpRequest called with remoteAddress={}, serverPort={}, serverName={}, protocol={}", 
-				remoteAddress, serverPort, serverName, protocol);
 		List<HttpTunnel> res = tunnelRegistry.findMatchingHttpTunnel(remoteAddress, serverPort, serverName, protocol);
-		log.warn("DEBUG: findMatchingHttpTunnel returned {} tunnels", res.size());
 		if (res.size() > 0) {
 			HttpTunnel ht = res.get(0);
 			SharedResourceLot srl = ht.getTunnel();
@@ -470,6 +471,24 @@ public class SharingManager implements InitializingBean, DisposableBean {
 	public CommandTunnel getCommandTunnelById(UUID uuid, long targetId) {
 		CommandTunnel res = tunnelRegistry.getTunnel(uuid, targetId);
 		return res;
+	}
+
+	public FileTunnel getTunnelForFileRequest(InetAddress remoteAddress, int serverPort, String serverName, String protocol, String requestPath) {
+		List<FileTunnel> res = tunnelRegistry.findMatchingFileTunnel(remoteAddress, serverPort, serverName, protocol, requestPath);
+		log.debug("File tunnel lookup for {}:{}{}{}  returned {} result(s)", serverName, serverPort, protocol, requestPath, res.size());
+		if (res.size() > 0) {
+			FileTunnel ft = res.get(0);
+			SharedResourceLot srl = ft.getSharedResourceLot();
+			/* If not authorized maybe it should be */
+			boolean isAlreadyAllowed = srl.getAllowedAddressRanges().stream()
+				.anyMatch(range -> range.matches(remoteAddress));
+			if (!isAlreadyAllowed && srl.isAutoAuthorizeByHttpUrl()) {
+				srl.addAllowedAddressRange(AddressRange.of(remoteAddress.getHostAddress()));
+			}
+			return ft;
+		} else {
+			return null;
+		}
 	}
 
 }

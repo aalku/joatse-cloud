@@ -17,6 +17,9 @@ import org.springframework.context.ApplicationListener;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authentication.ProviderManager;
+import org.springframework.security.authentication.dao.DaoAuthenticationProvider;
 import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -24,6 +27,8 @@ import org.springframework.security.config.annotation.web.configurers.oauth2.cli
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.AuthenticationException;
+import org.springframework.security.crypto.factory.PasswordEncoderFactories;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.AuthenticationFailureHandler;
@@ -66,6 +71,17 @@ public class WebSecurityConfiguration {
 	private UserManager userManager;
 	
 	/**
+	 * AuthenticationManager bean for programmatic authentication in REST API
+	 */
+	@Bean
+	public AuthenticationManager authenticationManager(UserManager userManager) throws Exception {
+		DaoAuthenticationProvider authProvider = new DaoAuthenticationProvider();
+		authProvider.setUserDetailsService(userManager.userDetailsService());
+		authProvider.setPasswordEncoder(PasswordEncoderFactories.createDelegatingPasswordEncoder());
+		return new ProviderManager(authProvider);
+	}
+	
+	/**
 	 */
 	@Bean
 	SecurityFilterChain filterChain(HttpSecurity http, JWTAuthorizationFilter jwtAuthorizationFilter) throws Exception {
@@ -84,6 +100,13 @@ public class WebSecurityConfiguration {
                 .requestMatchers(HttpMethod.GET, "/login.html", "/css/**", "/header.js", "/lib/*.js").permitAll()
 				.requestMatchers(HttpMethod.GET, "/user").permitAll()
 				.requestMatchers("/error").permitAll()
+				// REST API endpoints
+				.requestMatchers(HttpMethod.POST, "/api/v1/auth/login").permitAll()
+				.requestMatchers(HttpMethod.POST, "/api/v1/auth/refresh").authenticated()
+				.requestMatchers(HttpMethod.GET, "/api/v1/shares/requests/**").permitAll()
+				.requestMatchers(HttpMethod.POST, "/api/v1/shares/requests/*/confirm").hasRole("JOATSE_USER")
+				.requestMatchers(HttpMethod.POST, "/api/v1/shares/requests/*/reject").hasRole("JOATSE_USER")
+				.requestMatchers("/api/v1/sessions/**").hasRole("JOATSE_USER")
 				//
 				.requestMatchers(PATH_LOGIN_FORM, PATH_LOGIN_FORM + "/**", PATH_LOGIN_POST, PATH_LOGIN_POST + "/**").permitAll()
 				.requestMatchers(PATH_PASSWORD_RESET, PATH_PASSWORD_RESET + "/**").permitAll()

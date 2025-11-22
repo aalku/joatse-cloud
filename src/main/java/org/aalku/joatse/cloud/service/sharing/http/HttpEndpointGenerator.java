@@ -58,7 +58,7 @@ public class HttpEndpointGenerator {
 				throw new RuntimeException("Asked hostname '" + askedCloudHostname
 						+ "' is not allowed. Allowed hostnames are: " + httpHosts);
 			} else {
-				for (int p = portRange.min(); p < portRange.max(); p++) {
+				for (int p = portRange.min(); p <= portRange.max(); p++) {
 					for (String host : httpHosts) {
 						ListenAddress a = new ListenAddress(p, host, protocol);
 						if (!forbiddenAddresses.contains(a)) {
@@ -69,7 +69,7 @@ public class HttpEndpointGenerator {
 				throw new RuntimeException("Asked hostname '" + askedCloudHostname + "' is not available");
 			}
 		} else {
-			for (int p = portRange.min(); p < portRange.max(); p++) {
+			for (int p = portRange.min(); p <= portRange.max(); p++) {
 				for (String host : httpHosts) {
 					ListenAddress a;
 					if (host.startsWith(DYNAMIC_PREFIX)) {
@@ -124,6 +124,59 @@ public class HttpEndpointGenerator {
 			md.update(tunnel.getTunnel().getRequesterAddress().getAddress().getAddress());
 			md.update(new byte[] {(byte)(targetPort & 0xff), (byte)((targetPort >> 8) & 0xff)});
 			md.update(tunnel.getTargetURL().toExternalForm().getBytes(StandardCharsets.UTF_8));
+			byte[] digest = md.digest();
+			if (hashLength > digest.length) {
+				throw new IllegalArgumentException("Selected hash algorithm can only generate " + digest.length + " chars");
+			}
+			StringBuilder sb = new StringBuilder(2);
+			final String dictionary = "abcdefghmprstxyz"; 
+			for (int i = 0; i < hashLength; i++) {
+				char c = dictionary.charAt(digest[i] & 0x0F);
+				sb.append(c);
+			}
+			return sb.toString();
+		} catch (NoSuchAlgorithmException e) {
+			throw new RuntimeException(e);
+		}
+	}
+	
+	public ListenAddress generateListenAddressForFile(org.aalku.joatse.cloud.service.sharing.file.FileTunnel tunnel, 
+			LinkedHashSet<ListenAddress> forbiddenAddresses) {
+		// Files use the same port range as HTTP tunnels
+		String protocol = listenerConfigurationDetector.isSslEnabled() ? "https" : "http";
+		for (int p = httpPortRange.min(); p <= httpPortRange.max(); p++) {
+			for (String host : httpHosts) {
+				ListenAddress a;
+				if (host.startsWith(DYNAMIC_PREFIX)) {
+					a = new ListenAddress(p, generatePrefixForFile(tunnel) + "." + host.substring(DYNAMIC_PREFIX.length()), protocol);
+				} else {
+					a = new ListenAddress(p, host, protocol);
+				}
+				if (!forbiddenAddresses.contains(a)) {
+					return a;
+				}
+			}
+		}
+		throw new RuntimeException("Not enough http(s) ports or host names (" + httpPortRange.count() + "x"
+				+ httpHosts.size() + ") for this share size");
+	}
+	
+	private String generatePrefixForFile(org.aalku.joatse.cloud.service.sharing.file.FileTunnel tunnel) {
+		String prefixBase;
+		if (this.prefixStrategy == PrefixStrategy.DESCRIPTION) {
+			prefixBase = cleanString(tunnel.getTargetDescription());
+		} else {
+			// For files, use description as fallback even if URL strategy is configured
+			prefixBase = cleanString(tunnel.getTargetDescription());
+		}
+		return prefixBase + "-" + generateHashPrefixForFile(tunnel, this.prefixHashLength);
+	}
+	
+	private static String generateHashPrefixForFile(org.aalku.joatse.cloud.service.sharing.file.FileTunnel tunnel, int hashLength) {
+		try {
+			MessageDigest md = MessageDigest.getInstance("SHA-1");
+			md.update(tunnel.getSharedResourceLot().getRequesterAddress().getAddress().getAddress());
+			md.update(tunnel.getTargetPath().getBytes(StandardCharsets.UTF_8));
 			byte[] digest = md.digest();
 			if (hashLength > digest.length) {
 				throw new IllegalArgumentException("Selected hash algorithm can only generate " + digest.length + " chars");

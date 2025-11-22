@@ -38,7 +38,6 @@ class TerminalConnection extends AbstractToSocketConnection {
 		super(tunnel.getTargetId(), jSession, ByteBuffer.wrap(Hex.decode(encryptedSessionHex)));
 //		this.tunnel = tunnel;
 		this.terminalUpdateHandler = terminalUpdateHandler;
-		// TODO send a hello to the target and use eventHandler on response
 	}
 	
 	@Override

@@ -139,7 +139,7 @@ public class JWSSession {
 		this.wsSendWorker.setBandwithCalculator(bandwithCalculator.getOneWayOut());
 	}
 
-	void addTunnelConnection(AbstractToSocketConnection c) {
+	public void addTunnelConnection(AbstractToSocketConnection c) {
 		lock.lock();
 		try {
 			socketConnectionMap.put(c.socketId, c);
@@ -158,7 +158,7 @@ public class JWSSession {
 		closer.accept(reason, e);
 	}
 
-	void remove(AbstractToSocketConnection abstractToSocketConnection) {
+	public void remove(AbstractToSocketConnection abstractToSocketConnection) {
 		lock.lock();
 		try {
 			socketConnectionMap.remove(abstractToSocketConnection.socketId, abstractToSocketConnection);

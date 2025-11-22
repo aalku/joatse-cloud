@@ -79,7 +79,7 @@ public class JoatseTokenManager implements TokenVerifier, InitializingBean {
 
 	public String generateToken(Map<String, String> userDetails, List<String> authorities) {
 		return Jwts.builder().signWith(signingKey).setIssuedAt(new Date()).setIssuer(ISSUER)
-				.setExpiration(new Date(System.nanoTime() + tokenDurationMillis))
+				.setExpiration(new Date(System.currentTimeMillis() + tokenDurationMillis))
 				.addClaims(new LinkedHashMap<>(userDetails)).compact();
 	}
 

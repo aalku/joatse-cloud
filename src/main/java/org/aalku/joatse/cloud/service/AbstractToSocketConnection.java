@@ -26,6 +26,7 @@ public abstract class AbstractToSocketConnection {
 	protected static final byte MESSAGE_SOCKET_DATA = 2;
 	protected static final byte MESSAGE_SOCKET_CLOSE = 3;
 	protected static final byte MESSAGE_PUBLIC_KEY = 4;
+	// MESSAGE_FILE_READ_REQUEST (5) is deprecated - use MESSAGE_TYPE_NEW_SOCKET with additionalPayload instead
 	
 	public static final Set<Byte> messageTypesHandled = new HashSet<>(Arrays.asList(MESSAGE_TYPE_NEW_SOCKET, MESSAGE_SOCKET_DATA, MESSAGE_SOCKET_CLOSE));
 	
@@ -37,7 +38,7 @@ public abstract class AbstractToSocketConnection {
 	
 	private final Queue<Runnable> sendQueue = new LinkedBlockingDeque<>();
 	private final AtomicBoolean sending = new AtomicBoolean(false);
-	private final ReentrantLock sendLock = new ReentrantLock(true);
+	protected final ReentrantLock sendLock = new ReentrantLock(true);
 	
 	protected final JWSSession jSession;
 	
@@ -47,10 +48,45 @@ public abstract class AbstractToSocketConnection {
 	private final CompletableFuture<Boolean> closeStatus = new CompletableFuture<>();
 	protected final CompletableFuture<Void> connectionToFinalTargetResult = new CompletableFuture<Void>();
 
+	/**
+	 * Protected constructor that initializes and registers the connection.
+	 * Subclasses should pass additionalPayload to include in NEW_SOCKET message.
+	 * 
+	 * @param targetId The target ID for this connection
+	 * @param jSession The WebSocket session
+	 * @param additionalPayload Optional payload to send with NEW_SOCKET (e.g., file offset/length for file tunnels)
+	 */
 	protected AbstractToSocketConnection(long targetId, JWSSession jSession, ByteBuffer additionalPayload) {
 		this.jSession = jSession;
 		this.targetId = targetId;
+		getCloseStatus().whenComplete((r,e)->jSession.remove(this));
+		
+		// Register with session BEFORE sending NEW_SOCKET so responses can be routed
+		jSession.addTunnelConnection(this);
+		
+		// Send NEW_SOCKET message with optional payload
+		initializeConnection(additionalPayload);
+	}
 
+	/**
+	 * Initialize the connection by sending NEW_SOCKET message to the target.
+	 * The NEW_SOCKET message includes:
+	 * - Protocol version (1 byte)
+	 * - Message type: NEW_SOCKET (1 byte)
+	 * - Socket ID (8 bytes)
+	 * - Target ID (8 bytes)
+	 * - Additional payload (variable length, optional)
+	 * 
+	 * For file tunnels, additionalPayload contains:
+	 * - Offset: 8 bytes (long) - starting position in file
+	 * - Length: 8 bytes (long) - number of bytes to read (-1 for entire file)
+	 * 
+	 * For terminal tunnels, additionalPayload contains encrypted session data.
+	 * For TCP/HTTP tunnels, additionalPayload is typically null.
+	 * 
+	 * @param additionalPayload Optional payload appended to NEW_SOCKET message
+	 */
+	private void initializeConnection(ByteBuffer additionalPayload) {
 		sendLock.lock();
 		try {
 			ByteBuffer buffer = allocateHeaderAndDataBuffer();
@@ -73,9 +109,6 @@ public abstract class AbstractToSocketConnection {
 		} finally {
 			sendLock.unlock();
 		}
-		getCloseStatus().whenComplete((r,e)->jSession.remove(this));
-		jSession.addTunnelConnection(this);
-		
 	}
 
 	protected ByteBuffer allocateHeaderAndDataBuffer() {
@@ -216,7 +249,7 @@ public abstract class AbstractToSocketConnection {
 		}
 	} 
 
-	private CompletableFuture<Void> sendRawMessageToTarget(ByteBuffer buffer) {
+	protected CompletableFuture<Void> sendRawMessageToTarget(ByteBuffer buffer) {
 		if (!sendLock.isHeldByCurrentThread()) {
 			throw new AssertionError("!sendLock.isHeldByCurrentThread()");
 		}

@@ -1,6 +1,7 @@
 package org.aalku.joatse.cloud.web;
 
 import java.net.InetAddress;
+import java.net.URL;
 import java.net.UnknownHostException;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -16,6 +17,7 @@ import org.aalku.joatse.cloud.config.ListenerConfigurationDetector;
 import org.aalku.joatse.cloud.service.JWSSession;
 import org.aalku.joatse.cloud.service.JoatseWsHandler;
 import org.aalku.joatse.cloud.service.sharing.command.CommandTunnel;
+import org.aalku.joatse.cloud.service.sharing.file.FileTunnel;
 import org.aalku.joatse.cloud.service.sharing.http.HttpTunnel;
 import org.aalku.joatse.cloud.service.sharing.shared.SharedResourceLot;
 import org.aalku.joatse.cloud.service.sharing.shared.TcpTunnel;
@@ -121,6 +123,20 @@ public class SessionController {
 				}
 			}
 			m.put("httpItems", ahttp);
+
+			Collection<FileTunnel> fileItems = t.getFileItems();
+			List<Map<String, Object>> afile = new ArrayList<>(fileItems.size());
+			if (!fileItems.isEmpty()) {
+				for (FileTunnel x: fileItems) {
+					Map<String, Object> item = new LinkedHashMap<>();
+					item.put("targetId", "" + x.getTargetId());
+					item.put("targetDescription", x.getTargetDescription());
+					item.put("targetPath", x.getTargetPath());
+					item.put("listenUrl", Optional.ofNullable(x.getListenUrl()).map(URL::toString).orElse(null));
+					afile.add(item);
+				}
+			}
+			m.put("fileItems", afile);
 
 			Collection<CommandTunnel> commandItems = t.getCommandItems();
 			List<Map<String, Object>> acmd = new ArrayList<>(commandItems.size());

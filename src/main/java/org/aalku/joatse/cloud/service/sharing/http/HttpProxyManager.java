@@ -309,13 +309,24 @@ public class HttpProxyManager implements InitializingBean, DisposableBean {
 				HttpServletRequest servletRequest = (HttpServletRequest) request;
 				HttpServletResponse servletResponse = (HttpServletResponse) response;
 
-		        // ID http tunnel
+		        // ID http or file tunnel
 				InetAddress remoteAddress = InetAddress.getByName(request.getRemoteAddr());
 				int serverPort = request.getServerPort();
 				String serverName = request.getServerName();
 				String scheme = request.getScheme();
 				log.warn("DEBUG: HttpProxyManager.service called - remoteAddress={}, serverPort={}, serverName={}, scheme={}, requestURL={}", 
 						remoteAddress, serverPort, serverName, scheme, servletRequest.getRequestURL());
+				
+				// Check for file tunnel first
+				String requestPath = servletRequest.getRequestURI();
+				org.aalku.joatse.cloud.service.sharing.file.FileTunnel fileTunnel = sharingManager.getTunnelForFileRequest(remoteAddress, serverPort, serverName, scheme, requestPath);
+				if (fileTunnel != null) {
+					log.info("Request {} {} for file tunnel {}", servletRequest.getMethod(),
+							servletRequest.getRequestURL(), fileTunnel.getTargetId());
+					handleFileRequest(servletRequest, servletResponse, fileTunnel);
+					return;
+				}
+				
 				HttpTunnel httpTunnel = sharingManager.getTunnelForHttpRequest(remoteAddress, serverPort, serverName, scheme);
 				log.warn("DEBUG: HttpProxyManager.service found tunnel: {}", httpTunnel != null ? httpTunnel.getTargetId() : "null");
 
@@ -337,8 +348,8 @@ public class HttpProxyManager implements InitializingBean, DisposableBean {
 							servletRequest.getMethod(), servletRequest.getRequestURL());
 					HttpServletResponse hsr = (HttpServletResponse) response;
 					try (PrintWriter pw = new PrintWriter(hsr.getOutputStream())) {
-						hsr.setStatus(404);
-						
+						hsr.setStatus(511); // Network Authentication Required - IP not authorized
+
 						StringBuilder loginUrl = getPublicCloudUrl();
 						String requestUrl = getRequestUrl(servletRequest);
 						List<MediaType> accepted = MediaType.parseMediaTypes(servletRequest.getHeader("Accept"));						
@@ -350,7 +361,7 @@ public class HttpProxyManager implements InitializingBean, DisposableBean {
 							pw.println("</head><body>");
 							pw.print("<h1>511 Network Authentication Required</h1>");
 							
-							pw.print("<p>Can't find tunnel matching <span id='requested-url'>" + HtmlUtils.htmlEscape(requestUrl)
+							pw.print("<p>Can't find a shared resource matching <span id='requested-url'>" + HtmlUtils.htmlEscape(requestUrl)
 									+ "</span> allowed to be used from your IP address "
 									+ HtmlUtils.htmlEscape(remoteAddress.getHostAddress()) + "</p>");
 							
@@ -369,6 +380,378 @@ public class HttpProxyManager implements InitializingBean, DisposableBean {
 				log.error("Error " + request, e);
 				throw new RuntimeException(e);
 			}
+		}
+		
+		private void handleFileRequest(HttpServletRequest servletRequest, HttpServletResponse servletResponse,
+				org.aalku.joatse.cloud.service.sharing.file.FileTunnel fileTunnel) throws IOException {
+			String method = servletRequest.getMethod();
+			
+			// Only support GET and HEAD
+			if (!method.equals("GET") && !method.equals("HEAD")) {
+				servletResponse.sendError(405, "Method Not Allowed");
+				servletResponse.setHeader("Allow", "GET, HEAD");
+				return;
+			}
+			
+			// Find the JWSSession for this tunnel's owner
+			Collection<org.aalku.joatse.cloud.service.JWSSession> sessions = 
+					joatseWsHandler.getSessions(fileTunnel.getSharedResourceLot().getOwner());
+			org.aalku.joatse.cloud.service.JWSSession jSession = sessions.stream()
+					.filter(s -> fileTunnel.getSharedResourceLot().equals(s.getSharedResourceLot()))
+					.findFirst()
+					.orElse(null);
+			
+			if (jSession == null) {
+				log.warn("File request rejected: target session not connected for tunnel {}", fileTunnel.getTargetId());
+				servletResponse.sendError(503, "Service Unavailable - target not connected");
+				return;
+			}
+			
+			// Parse Range header
+			String rangeHeader = servletRequest.getHeader("Range");
+			final long offset;
+			long length = -1; // -1 means entire file
+			boolean isRangeRequest = false;
+			
+			if (method.equals("HEAD")) {
+				length = 0; // For HEAD, request metadata only
+				offset = 0;
+			} else if (rangeHeader != null && rangeHeader.startsWith("bytes=")) {
+				// Simple range parsing (doesn't support multiple ranges yet)
+				String range = rangeHeader.substring(6);
+				String[] parts = range.split("-");
+				try {
+					offset = Long.parseLong(parts[0]);
+					if (parts.length > 1 && !parts[1].isEmpty()) {
+						long end = Long.parseLong(parts[1]);
+						length = end - offset + 1;
+					}
+					isRangeRequest = true;
+					// If length stays -1, read from offset to end
+				} catch (NumberFormatException e) {
+					servletResponse.sendError(416, "Requested Range Not Satisfiable");
+					return;
+				}
+			} else {
+				offset = 0;
+			}
+			
+			// Start async processing
+			final jakarta.servlet.AsyncContext asyncContext = servletRequest.startAsync();
+			asyncContext.setTimeout(0); // No timeout - rely on inactivity timeout instead
+			
+			// Create file read connection
+			org.aalku.joatse.cloud.service.sharing.file.FileReadConnection fileConn = 
+					new org.aalku.joatse.cloud.service.sharing.file.FileReadConnection(fileTunnel, jSession, offset, length);
+			
+			log.info("Initiated async file request for {} {} (offset={}, length={})", 
+					method, fileTunnel.getTargetPath(), offset, length);
+			
+			final boolean finalIsRangeRequest = isRangeRequest;
+			final long finalLength = length;
+			
+			// Handle metadata asynchronously
+			CompletableFuture<org.json.JSONObject> metadataFuture = fileConn.getMetadataAsync();
+			
+			// Add timeout handling
+			scheduler.schedule(() -> {
+				if (!metadataFuture.isDone()) {
+					metadataFuture.completeExceptionally(new java.util.concurrent.TimeoutException("Metadata timeout"));
+				}
+			}, 30, TimeUnit.SECONDS);
+			
+			metadataFuture.whenComplete((metadata, metadataError) -> {
+					if (metadataError != null) {
+						log.error("Error getting metadata for {}: {}", fileTunnel.getTargetPath(), metadataError.getMessage());
+						handleAsyncError(asyncContext, servletResponse, fileConn, jSession, 
+								"Timeout or error waiting for file metadata", 500);
+						return;
+					}
+					
+					try {
+						// Check for error in metadata
+						if (metadata.has("error")) {
+							String error = metadata.getString("error");
+							log.warn("File request failed: {}", error);
+							int statusCode = 500;
+							if (error.contains("not found") || error.contains("does not exist")) {
+								statusCode = 404;
+							} else if (error.contains("permission") || error.contains("access denied")) {
+								statusCode = 403;
+							}
+							handleAsyncError(asyncContext, servletResponse, fileConn, jSession, error, statusCode);
+							return;
+						}
+						
+						// Extract file information from metadata
+						String fileName = metadata.optString("fileName", extractFilename(fileTunnel.getTargetPath()));
+						long fileSize = metadata.optLong("fileSize", -1);
+						String contentType = metadata.optString("contentType", guessContentType(fileName));
+						
+						// Set response headers
+						servletResponse.setHeader("Accept-Ranges", "bytes");
+						servletResponse.setContentType(contentType);
+						
+						if (metadata.has("lastModified")) {
+							long lastModified = metadata.getLong("lastModified");
+							servletResponse.setDateHeader("Last-Modified", lastModified);
+						}
+						
+						// Handle HEAD request (return headers only)
+						if (method.equals("HEAD")) {
+							if (fileSize >= 0) {
+								servletResponse.setContentLengthLong(fileSize);
+							}
+							servletResponse.setStatus(200);
+							cleanupAndComplete(asyncContext, fileConn, jSession);
+							return;
+						}
+						
+						// Handle range request
+						if (finalIsRangeRequest && fileSize >= 0) {
+							long rangeEnd = (finalLength == -1) ? fileSize - 1 : offset + finalLength - 1;
+							if (rangeEnd >= fileSize) {
+								rangeEnd = fileSize - 1;
+							}
+							long contentLength = rangeEnd - offset + 1;
+							
+							servletResponse.setStatus(206); // Partial Content
+							servletResponse.setHeader("Content-Range", 
+									String.format("bytes %d-%d/%d", offset, rangeEnd, fileSize));
+							servletResponse.setContentLengthLong(contentLength);
+						} else {
+							servletResponse.setStatus(200);
+							if (fileSize >= 0) {
+								servletResponse.setContentLengthLong(fileSize);
+							}
+						}
+						
+						// Stream file data asynchronously
+						streamFileDataAsync(asyncContext, servletResponse, fileConn, jSession, 
+								fileTunnel, finalLength, offset);
+						
+					} catch (Exception e) {
+						log.error("Error processing metadata for {}: {}", fileTunnel.getTargetPath(), e.getMessage(), e);
+						handleAsyncError(asyncContext, servletResponse, fileConn, jSession, 
+								"Error processing file metadata", 500);
+					}
+				});
+		}
+		
+		private void streamFileDataAsync(jakarta.servlet.AsyncContext asyncContext,
+				HttpServletResponse servletResponse,
+				org.aalku.joatse.cloud.service.sharing.file.FileReadConnection fileConn,
+				org.aalku.joatse.cloud.service.JWSSession jSession,
+				org.aalku.joatse.cloud.service.sharing.file.FileTunnel fileTunnel,
+				long targetLength, long offset) {
+			
+			try {
+				final java.io.OutputStream out = servletResponse.getOutputStream();
+				final long[] bytesWritten = {0};
+				final java.util.concurrent.atomic.AtomicBoolean completed = new java.util.concurrent.atomic.AtomicBoolean(false);
+				final java.util.concurrent.ScheduledFuture<?>[] timeoutTask = new java.util.concurrent.ScheduledFuture<?>[1];
+				
+				// Schedule timeout for inactivity
+				final Runnable resetTimeout = () -> {
+					if (timeoutTask[0] != null) {
+						timeoutTask[0].cancel(false);
+					}
+					timeoutTask[0] = scheduler.schedule(() -> {
+						if (!completed.get()) {
+							log.warn("Timeout: No data received for 30 seconds for file {}", fileTunnel.getTargetPath());
+							handleAsyncError(asyncContext, servletResponse, fileConn, jSession,
+									"Timeout waiting for file data", 500);
+							completed.set(true);
+						}
+					}, 30, TimeUnit.SECONDS);
+				};
+				
+				// Set up data consumer
+				fileConn.setDataConsumer(dataBuffer -> {
+					if (completed.get()) {
+						return;
+					}
+					try {
+						resetTimeout.run(); // Reset timeout on each chunk
+						
+						// Write chunk to HTTP response
+						byte[] bytes = new byte[dataBuffer.remaining()];
+						dataBuffer.get(bytes);
+						out.write(bytes);
+						bytesWritten[0] += bytes.length;
+						
+						// Check if we've written enough for range request
+						if (targetLength > 0 && bytesWritten[0] >= targetLength) {
+							log.info("File download completed: {} bytes written for {} (target reached)",
+									bytesWritten[0], fileTunnel.getTargetPath());
+							if (timeoutTask[0] != null) {
+								timeoutTask[0].cancel(false);
+							}
+							completed.set(true);
+							out.flush();
+							cleanupAndComplete(asyncContext, fileConn, jSession);
+						}
+					} catch (IOException e) {
+						log.error("Error writing data chunk for {}: {}", fileTunnel.getTargetPath(), e.getMessage());
+						if (timeoutTask[0] != null) {
+							timeoutTask[0].cancel(false);
+						}
+						completed.set(true);
+						handleAsyncError(asyncContext, servletResponse, fileConn, jSession,
+								"Error writing response", 500);
+					}
+				});
+				
+				// Set up EOF callback
+				fileConn.setEofCallback(() -> {
+					if (!completed.get()) {
+						try {
+							if (timeoutTask[0] != null) {
+								timeoutTask[0].cancel(false);
+							}
+							completed.set(true);
+							out.flush();
+							log.info("File download completed: {} bytes written for {} (EOF)",
+									bytesWritten[0], fileTunnel.getTargetPath());
+							cleanupAndComplete(asyncContext, fileConn, jSession);
+						} catch (IOException e) {
+							log.error("Error flushing output for {}: {}", fileTunnel.getTargetPath(), e.getMessage());
+							handleAsyncError(asyncContext, servletResponse, fileConn, jSession,
+									"Error completing response", 500);
+						}
+					}
+				});
+				
+				// Set up error callback
+				fileConn.setErrorCallback(error -> {
+					if (!completed.get()) {
+						if (timeoutTask[0] != null) {
+							timeoutTask[0].cancel(false);
+						}
+						completed.set(true);
+						log.error("Error during file transfer for {}: {}", fileTunnel.getTargetPath(), error.getMessage());
+						handleAsyncError(asyncContext, servletResponse, fileConn, jSession,
+								"Error reading file data", 500);
+					}
+				});
+				
+				// Start the initial timeout
+				resetTimeout.run();
+				
+			} catch (IOException e) {
+				log.error("Error getting output stream for {}: {}", fileTunnel.getTargetPath(), e.getMessage());
+				handleAsyncError(asyncContext, servletResponse, fileConn, jSession,
+						"Error getting response output stream", 500);
+			}
+		}
+		
+		private void handleAsyncError(jakarta.servlet.AsyncContext asyncContext,
+				HttpServletResponse servletResponse,
+				org.aalku.joatse.cloud.service.sharing.file.FileReadConnection fileConn,
+				org.aalku.joatse.cloud.service.JWSSession jSession,
+				String message, int statusCode) {
+			try {
+				if (!servletResponse.isCommitted()) {
+					servletResponse.sendError(statusCode, message);
+				}
+			} catch (IOException e) {
+				log.error("Error sending error response: {}", e.getMessage());
+			} finally {
+				cleanupAndComplete(asyncContext, fileConn, jSession);
+			}
+		}
+		
+		private void cleanupAndComplete(jakarta.servlet.AsyncContext asyncContext,
+				org.aalku.joatse.cloud.service.sharing.file.FileReadConnection fileConn,
+				org.aalku.joatse.cloud.service.JWSSession jSession) {
+			try {
+				jSession.remove(fileConn);
+				fileConn.close();
+			} catch (Exception e) {
+				log.warn("Error cleaning up file connection: {}", e.getMessage());
+			} finally {
+				try {
+					asyncContext.complete();
+				} catch (Exception e) {
+					log.warn("Error completing async context: {}", e.getMessage());
+				}
+			}
+		}
+		
+		private String extractFilename(String path) {
+			if (path == null || path.isEmpty()) {
+				return "file";
+			}
+			int lastSlash = path.lastIndexOf('/');
+			if (lastSlash >= 0 && lastSlash < path.length() - 1) {
+				return path.substring(lastSlash + 1);
+			}
+			return path;
+		}
+		
+		private String guessContentType(String fileName) {
+			if (fileName == null) {
+				return "application/octet-stream";
+			}
+			String lower = fileName.toLowerCase();
+			
+			// Text formats
+			if (lower.endsWith(".txt")) return "text/plain";
+			if (lower.endsWith(".html") || lower.endsWith(".htm")) return "text/html";
+			if (lower.endsWith(".css")) return "text/css";
+			if (lower.endsWith(".csv")) return "text/csv";
+			if (lower.endsWith(".log")) return "text/plain";
+			
+			// Data formats
+			if (lower.endsWith(".json")) return "application/json";
+			if (lower.endsWith(".xml")) return "application/xml";
+			
+			// Documents
+			if (lower.endsWith(".pdf")) return "application/pdf";
+			
+			// Images
+			if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+			if (lower.endsWith(".png")) return "image/png";
+			if (lower.endsWith(".gif")) return "image/gif";
+			if (lower.endsWith(".svg")) return "image/svg+xml";
+			if (lower.endsWith(".ico")) return "image/x-icon";
+			if (lower.endsWith(".webp")) return "image/webp";
+			if (lower.endsWith(".bmp")) return "image/bmp";
+			
+			// Video formats
+			if (lower.endsWith(".mp4")) return "video/mp4";
+			if (lower.endsWith(".webm")) return "video/webm";
+			if (lower.endsWith(".ogg") || lower.endsWith(".ogv")) return "video/ogg";
+			if (lower.endsWith(".avi")) return "video/x-msvideo";
+			if (lower.endsWith(".mov")) return "video/quicktime";
+			if (lower.endsWith(".mkv")) return "video/x-matroska";
+			
+			// Audio formats
+			if (lower.endsWith(".mp3")) return "audio/mpeg";
+			if (lower.endsWith(".wav")) return "audio/wav";
+			if (lower.endsWith(".oga")) return "audio/ogg";
+			if (lower.endsWith(".m4a")) return "audio/mp4";
+			if (lower.endsWith(".aac")) return "audio/aac";
+			if (lower.endsWith(".flac")) return "audio/flac";
+			
+			// Web fonts
+			if (lower.endsWith(".woff")) return "font/woff";
+			if (lower.endsWith(".woff2")) return "font/woff2";
+			if (lower.endsWith(".ttf")) return "font/ttf";
+			if (lower.endsWith(".otf")) return "font/otf";
+			if (lower.endsWith(".eot")) return "application/vnd.ms-fontobject";
+			
+			// JavaScript
+			if (lower.endsWith(".js") || lower.endsWith(".mjs")) return "application/javascript";
+			
+			// Archives
+			if (lower.endsWith(".zip")) return "application/zip";
+			if (lower.endsWith(".gz")) return "application/gzip";
+			if (lower.endsWith(".tar")) return "application/x-tar";
+			if (lower.endsWith(".rar")) return "application/vnd.rar";
+			if (lower.endsWith(".7z")) return "application/x-7z-compressed";
+			
+			return "application/octet-stream";
 		}
 
 		private void websocketUpgrade(HttpServletRequest servletRequest,
@@ -850,6 +1233,9 @@ public class HttpProxyManager implements InitializingBean, DisposableBean {
 
 	@Autowired
 	public SharingManager sharingManager;
+	
+	@Autowired
+	private org.aalku.joatse.cloud.service.JoatseWsHandler joatseWsHandler;
 
 	private Server unsafeClientProxyServer;
 	private Server normalProxyServer;
@@ -885,7 +1271,7 @@ public class HttpProxyManager implements InitializingBean, DisposableBean {
 		 */
 		Pattern r = Pattern.compile("[;]?\\s*[Dd][Oo][Mm][Aa][Ii][Nn]=[^\\s;]*");
 		Matcher m = r.matcher(headerValue);
-		StringBuilder out = new StringBuilder();
+		StringBuffer out = new StringBuffer();
 		while (m.find()) {
 			m.appendReplacement(out, "");
 		}
