@@ -8,7 +8,7 @@ Joatse project intends to create an open source tunneling solution to share priv
 
 It's designed for sysadmins and software developers to access resources they already have access to but quickly and as easy as possible. Also they must be able to give access to other selected people.
 
-Right now you can share access to any TCP port that is accessible to you and any http(s) resource but in the future we would like to be able to share UDP ports, files, folders and maybe other resources.
+Right now you can share access to any TCP port that is accessible to you, any http(s) resource, and individual files or folders (RO/RW).
 
 You can also share any TCP port or http(s) resource via unauthenticated Socks5 proxy protocol.
 
@@ -26,9 +26,9 @@ You don't need to use passwords with the client software so anyone else sharing 
 
 The code is written in Java 
 
-Joatse uses it's own "cloud" server software as web server, tunnel broker and sharing open ports. It needs Java 11+.
+Joatse uses it's own "cloud" server software as web server, tunnel broker and sharing open ports. It needs Java 21+.
 
-[Joatse client software](https://github.com/aalku/joatse-target) connects to that server with web sockets, offering local resources to share. It needs Java 8+ so you can run it where Java 11+ is not installed.
+[Joatse client software](https://github.com/aalku/joatse-target) connects to that server with web sockets, offering local resources to share. It needs Java 8+ so you can run it where Java 21+ is not installed.
 
 Once the user confirms the tunnel creation the server will open a TCP port and tunnel any authorized incoming connection through the very same web socket to the client software and it will connect it to a new TCP connection to the target.
 
@@ -36,7 +36,7 @@ It works the same way for http(s) and socks5 as they are internally handled most
 
 ## Project state
 
-It just started working so it isn't beautiful, it might crash and the functionality is limited, but it really works.
+It isn't beautiful, it might crash and the functionality is limited, but it really works.
 
 You can find the client software [here](https://github.com/aalku/joatse-target).
 

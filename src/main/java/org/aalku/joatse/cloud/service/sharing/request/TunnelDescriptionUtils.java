@@ -73,4 +73,29 @@ public class TunnelDescriptionUtils {
                     return "file";
                 });
     }
+    
+    /**
+     * Generate default description for folder tunnel if not provided
+     * @param description Provided description (may be null or empty)
+     * @param targetPath Target folder path
+     * @return Default description or provided description if not empty
+     */
+    public static String getDefaultFolderDescription(String description, String targetPath) {
+        return Optional.ofNullable(description)
+                .filter(s -> !s.isEmpty())
+                .orElseGet(() -> {
+                    if (targetPath != null && !targetPath.isEmpty()) {
+                        // Remove trailing slash if present
+                        String cleanPath = targetPath.endsWith("/") || targetPath.endsWith("\\")
+                                ? targetPath.substring(0, targetPath.length() - 1)
+                                : targetPath;
+                        int lastSeparator = Math.max(cleanPath.lastIndexOf('/'), cleanPath.lastIndexOf('\\'));
+                        if (lastSeparator >= 0 && lastSeparator < cleanPath.length() - 1) {
+                            return cleanPath.substring(lastSeparator + 1);
+                        }
+                        return cleanPath;
+                    }
+                    return "folder";
+                });
+    }
 }

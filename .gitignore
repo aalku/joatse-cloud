@@ -24,3 +24,4 @@ hs_err_pid*
 *.log.gz
 *.tmp
 target
+/manual-tests

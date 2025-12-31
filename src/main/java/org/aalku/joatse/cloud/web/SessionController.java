@@ -18,6 +18,7 @@ import org.aalku.joatse.cloud.service.JWSSession;
 import org.aalku.joatse.cloud.service.JoatseWsHandler;
 import org.aalku.joatse.cloud.service.sharing.command.CommandTunnel;
 import org.aalku.joatse.cloud.service.sharing.file.FileTunnel;
+import org.aalku.joatse.cloud.service.sharing.folder.FolderTunnel;
 import org.aalku.joatse.cloud.service.sharing.http.HttpTunnel;
 import org.aalku.joatse.cloud.service.sharing.shared.SharedResourceLot;
 import org.aalku.joatse.cloud.service.sharing.shared.TcpTunnel;
@@ -153,6 +154,21 @@ public class SessionController {
 				}
 			}
 			m.put("commandItems", acmd);
+
+			Collection<FolderTunnel> folderItems = t.getFolderItems();
+			List<Map<String, Object>> afolder = new ArrayList<>(folderItems.size());
+			if (!folderItems.isEmpty()) {
+				for (FolderTunnel x: folderItems) {
+					Map<String, Object> item = new LinkedHashMap<>();
+					item.put("targetId", "" + x.getTargetId());
+					item.put("targetDescription", x.getTargetDescription());
+					item.put("targetPath", x.getTargetPath());
+					item.put("readOnly", x.isReadOnly());
+					item.put("listenUrl", Optional.ofNullable(x.getListenUrl()).map(URL::toString).orElse(null));
+					afolder.add(item);
+				}
+			}
+			m.put("folderItems", afolder);
 			
 			return m;
 		}).collect(Collectors.toList()));

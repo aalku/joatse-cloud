@@ -1,8 +1,8 @@
 package org.aalku.joatse.cloud.service.initialization;
 
 import java.util.List;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.ObjectMapper;
 
 /**
  * JSON schema for database initialization data.
@@ -207,7 +207,7 @@ public class DatabaseInitializationData {
             }
             try {
                 return objectMapper.writeValueAsString(resources);
-            } catch (JsonProcessingException e) {
+            } catch (JacksonException e) {
                 throw new RuntimeException("Failed to convert resources to JSON string: " + e.getMessage(), e);
             }
         }

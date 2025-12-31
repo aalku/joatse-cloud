@@ -53,18 +53,20 @@ import org.aalku.joatse.cloud.service.sharing.shared.SharedResourceLot;
 import org.aalku.joatse.cloud.tools.io.AsyncTcpPortListener;
 import org.aalku.joatse.cloud.tools.io.IOTools;
 import org.aalku.joatse.cloud.tools.io.PortRange;
-import org.eclipse.jetty.client.HttpClient;
-import org.eclipse.jetty.client.HttpClientTransport;
-import org.eclipse.jetty.client.HttpDestination;
-import org.eclipse.jetty.client.HttpRequest;
-import org.eclipse.jetty.client.Origin;
-import org.eclipse.jetty.client.Origin.Address;
-import org.eclipse.jetty.client.Origin.Protocol;
-import org.eclipse.jetty.client.ProxyConfiguration.Proxy;
 import org.eclipse.jetty.client.SwitchboardConnection;
-import org.eclipse.jetty.client.api.Request;
-import org.eclipse.jetty.client.api.Response;
-import org.eclipse.jetty.client.http.HttpClientTransportOverHTTP;
+import org.aalku.joatse.cloud.util.MimeTypeUtil;
+import org.eclipse.jetty.client.Destination;
+import org.eclipse.jetty.client.HttpClient;
+import org.eclipse.jetty.client.Origin;
+import org.eclipse.jetty.client.Request;
+import org.eclipse.jetty.client.Response;
+import org.eclipse.jetty.client.Result;
+import org.eclipse.jetty.client.transport.HttpClientTransportOverHTTP;
+import org.eclipse.jetty.ee11.proxy.AsyncMiddleManServlet;
+import org.eclipse.jetty.ee11.servlet.ServletContextHandler;
+import org.eclipse.jetty.ee11.servlet.ServletHolder;
+import org.eclipse.jetty.ee11.websocket.server.JettyWebSocketServerContainer;
+import org.eclipse.jetty.ee11.websocket.server.config.JettyWebSocketServletContainerInitializer;
 import org.eclipse.jetty.http.HttpField;
 import org.eclipse.jetty.http.HttpFields;
 import org.eclipse.jetty.http.HttpVersion;
@@ -72,29 +74,26 @@ import org.eclipse.jetty.io.ClientConnectionFactory;
 import org.eclipse.jetty.io.ClientConnector;
 import org.eclipse.jetty.io.Connection;
 import org.eclipse.jetty.io.EndPoint;
-import org.eclipse.jetty.proxy.AbstractProxyServlet;
-import org.eclipse.jetty.proxy.AfterContentTransformer;
-import org.eclipse.jetty.proxy.AsyncMiddleManServlet;
 import org.eclipse.jetty.server.HttpConfiguration;
 import org.eclipse.jetty.server.HttpConnectionFactory;
 import org.eclipse.jetty.server.SecureRequestCustomizer;
 import org.eclipse.jetty.server.Server;
 import org.eclipse.jetty.server.ServerConnector;
 import org.eclipse.jetty.server.SslConnectionFactory;
-import org.eclipse.jetty.servlet.ServletContextHandler;
-import org.eclipse.jetty.servlet.ServletHolder;
 import org.eclipse.jetty.util.Promise;
 import org.eclipse.jetty.util.URIUtil;
 import org.eclipse.jetty.util.ssl.SslContextFactory;
+import org.eclipse.jetty.websocket.api.Callback;
 import org.eclipse.jetty.websocket.api.Session;
-import org.eclipse.jetty.websocket.api.WebSocketListener;
+import org.eclipse.jetty.websocket.api.annotations.OnWebSocketClose;
+import org.eclipse.jetty.websocket.api.annotations.OnWebSocketError;
+import org.eclipse.jetty.websocket.api.annotations.OnWebSocketMessage;
+import org.eclipse.jetty.websocket.api.annotations.OnWebSocketOpen;
+import org.eclipse.jetty.websocket.api.annotations.WebSocket;
 import org.eclipse.jetty.websocket.api.exceptions.CloseException;
 import org.eclipse.jetty.websocket.api.exceptions.UpgradeException;
 import org.eclipse.jetty.websocket.client.ClientUpgradeRequest;
 import org.eclipse.jetty.websocket.client.WebSocketClient;
-import org.eclipse.jetty.websocket.core.server.WebSocketServerComponents;
-import org.eclipse.jetty.websocket.server.JettyWebSocketServerContainer;
-import org.eclipse.jetty.websocket.server.config.JettyWebSocketServletContainerInitializer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.DisposableBean;
@@ -120,38 +119,53 @@ public class HttpProxyManager implements InitializingBean, DisposableBean {
 	private CopyOnWriteArrayList<WeakReference<WebSocketClient>> wsClients = new CopyOnWriteArrayList<>();
 	private ScheduledExecutorService scheduler;
 	
-	public class ServerSideWsHandler implements WebSocketListener {
+	/**
+	 * Server-side WebSocket handler using Jetty 12 annotation-based approach
+	 */
+	@WebSocket
+	public class ServerSideWsHandler {
 		private CompletableFuture<Session> cfOnConnect = new CompletableFuture<>();
 		private CompletableFuture<Void> cfOnClose = new CompletableFuture<>();
 		private Consumer<String> textMessageHandler;
 		private Consumer<byte[]> binaryMessageHandler;
-		@Override
-		public void onWebSocketConnect(Session session) {
-			log.info(String.format("S onWebSocketConnect: %s", session.getUpgradeRequest().getRequestURI()));
+		
+		@OnWebSocketOpen
+		public void onWebSocketOpen(Session session) {
+			log.info("S onWebSocketOpen: %s".formatted(session.getUpgradeRequest().getRequestURI()));
 			cfOnConnect.complete(session);
 		}
-		@Override
+		
+		@OnWebSocketClose
 		public void onWebSocketClose(int statusCode, String reason) {
-			log.info(String.format("S onWebSocketClose: %s, %s", statusCode, reason));
+			log.info("S onWebSocketClose: %s, %s".formatted(statusCode, reason));
 			cfOnClose.complete(null);
 		}
-		@Override
+		
+		@OnWebSocketError
 		public void onWebSocketError(Throwable cause) {
-			log.info(String.format("S onWebSocketError: %s", cause));
+			log.info("S onWebSocketError: %s".formatted(cause));
 			cfOnConnect.completeExceptionally(cause);
 		}
-		@Override
+		
+		@OnWebSocketMessage
 		public void onWebSocketText(String message) {
-			log.info(String.format("S onWebSocketText: %s", message));
-			textMessageHandler.accept(message);
+			log.info("S onWebSocketText: %s".formatted(message));
+			if (textMessageHandler != null) {
+				textMessageHandler.accept(message);
+			}
 		}
-		@Override
-		public void onWebSocketBinary(byte[] payload, int offset, int len) {
-			log.info(String.format("S onWebSocketBinary"));
-			byte[] m = new byte[len];
-			System.arraycopy(payload, offset, m, 0, len);
-			binaryMessageHandler.accept(m);
+		
+		@OnWebSocketMessage
+		public void onWebSocketBinary(ByteBuffer payload, Callback callback) {
+			log.info("S onWebSocketBinary");
+			if (binaryMessageHandler != null) {
+				byte[] data = new byte[payload.remaining()];
+				payload.get(data);
+				binaryMessageHandler.accept(data);
+			}
+			callback.succeed();
 		}
+		
 		public void setTextMessageHandler(Consumer<String> textMessageHandler) {
 			this.textMessageHandler = textMessageHandler;
 		}
@@ -166,47 +180,63 @@ public class HttpProxyManager implements InitializingBean, DisposableBean {
 		}
 	}
 	
-	public class ClientSideWsHandler implements WebSocketListener {
+	/**
+	 * Client-side WebSocket handler using Jetty 12 annotation-based approach
+	 */
+	@WebSocket
+	public class ClientSideWsHandler {
 		private CompletableFuture<Session> cfOnConnect = new CompletableFuture<>();
 		private CompletableFuture<Void> cfOnClose = new CompletableFuture<>();
 		private Consumer<String> textMessageHandler;
 		private Consumer<byte[]> binaryMessageHandler;
 		private CompletableFuture<Integer> cfErrorCode = new CompletableFuture<>();
+		
 		public ClientSideWsHandler() {
 		}
-		@Override
-		public void onWebSocketConnect(Session session) {
-			log.info(String.format("C onWebSocketConnect: %s", session.getUpgradeRequest().getRequestURI()));
+		
+		@OnWebSocketOpen
+		public void onWebSocketOpen(Session session) {
+			log.info("C onWebSocketOpen: %s".formatted(session.getUpgradeRequest().getRequestURI()));
 			cfOnConnect.complete(session);
 		}
-		@Override
+		
+		@OnWebSocketClose
 		public void onWebSocketClose(int statusCode, String reason) {
-			log.info(String.format("C onWebSocketClose: %s, %s", statusCode, reason));
+			log.info("C onWebSocketClose: %s, %s".formatted(statusCode, reason));
 			cfOnClose.complete(null);
 		}
-		@Override
+		
+		@OnWebSocketError
 		public void onWebSocketError(Throwable cause) {
-			log.info(String.format("C onWebSocketError: %s", cause));
+			log.info("C onWebSocketError: %s".formatted(cause));
 			
-			if (cause instanceof UpgradeException) {
-				cfErrorCode.complete(((UpgradeException) cause).getResponseStatusCode());
-			} else if (cause instanceof CloseException) {
-				cfErrorCode.complete(((CloseException) cause).getStatusCode());
+			if (cause instanceof UpgradeException exception) {
+				cfErrorCode.complete(exception.getResponseStatusCode());
+			} else if (cause instanceof CloseException exception) {
+				cfErrorCode.complete(exception.getStatusCode());
 			}
 			cfOnConnect.completeExceptionally(cause);
 		}
-		@Override
+		
+		@OnWebSocketMessage
 		public void onWebSocketText(String message) {
-			log.info(String.format("C onWebSocketText: %s", message));
-			textMessageHandler.accept(message);
+			log.info("C onWebSocketText: %s".formatted(message));
+			if (textMessageHandler != null) {
+				textMessageHandler.accept(message);
+			}
 		}
-		@Override
-		public void onWebSocketBinary(byte[] payload, int offset, int len) {
-			log.info(String.format("C onWebSocketBinary"));
-			byte[] m = new byte[len];
-			System.arraycopy(payload, offset, m, 0, len);
-			binaryMessageHandler.accept(m);
+		
+		@OnWebSocketMessage
+		public void onWebSocketBinary(ByteBuffer payload, Callback callback) {
+			log.info("C onWebSocketBinary");
+			if (binaryMessageHandler != null) {
+				byte[] data = new byte[payload.remaining()];
+				payload.get(data);
+				binaryMessageHandler.accept(data);
+			}
+			callback.succeed();
 		}
+		
 		public void setTextMessageHandler(Consumer<String> textMessageHandler) {
 			this.textMessageHandler = textMessageHandler;
 		}
@@ -248,8 +278,6 @@ public class HttpProxyManager implements InitializingBean, DisposableBean {
 	private final class AsyncMiddleManServletExtension extends AsyncMiddleManServlet {
 		private static final long serialVersionUID = 1L;
 		private boolean unsafeHttpClient;
-//		private WebSocketComponents wsComponents;
-//		private WebSocketMappings wsMapping;
 
 		public AsyncMiddleManServletExtension(boolean unsafeHttpClient) {
 			this.unsafeHttpClient = unsafeHttpClient;
@@ -258,10 +286,6 @@ public class HttpProxyManager implements InitializingBean, DisposableBean {
 		@Override
 		public void init() throws ServletException {
 			super.init();
-            ServletContext servletContext = getServletContext();
-//            wsComponents = 
-            WebSocketServerComponents.getWebSocketComponents(servletContext);
-//            wsMapping = new WebSocketMappings(wsComponents);
 		}
 
 		@Override
@@ -270,28 +294,33 @@ public class HttpProxyManager implements InitializingBean, DisposableBean {
 		}
 
 		@Override
-		protected HttpClient newHttpClient(ClientConnector clientConnector) {
-	        HttpClient client = new HttpClient(new HttpClientTransportOverHTTP(clientConnector) {
-	        	@Override
-	        	public Origin newOrigin(HttpRequest request) {
-	        		request.headers(h->{
-	        			String ht = h.get(REQUEST_PROXY_HEADER_HTTPTUNNEL);
-	        			if (ht != null) {
-	        				h.remove(REQUEST_PROXY_HEADER_HTTPTUNNEL);
-	        				if (request.getTag() == null) {
-	        					HttpTunnel tunnel = tunnelFromHeader(ht);
-	        					request.tag(tunnel);
-	        				}
-	        			}
-	        		});
-	        		Origin origin = super.newOrigin(request);
+		protected HttpClient newHttpClient() {
+			ClientConnector clientConnector = new ClientConnector();
+			SslContextFactory.Client sslContextFactory = new SslContextFactory.Client();
+			sslContextFactory.setTrustAll(unsafeHttpClient);
+			clientConnector.setSslContextFactory(sslContextFactory);
+			
+			HttpClientTransportOverHTTP transport = new HttpClientTransportOverHTTP(clientConnector) {
+				@Override
+				public Origin newOrigin(org.eclipse.jetty.client.Request request) {
+					request.headers(h -> {
+						String ht = h.get(REQUEST_PROXY_HEADER_HTTPTUNNEL);
+						if (ht != null) {
+							h.remove(REQUEST_PROXY_HEADER_HTTPTUNNEL);
+							if (request.getTag() == null) {
+								HttpTunnel tunnel = tunnelFromHeader(ht);
+								request.tag(tunnel);
+							}
+						}
+					});
+					Origin origin = super.newOrigin(request);
 					return origin;
-	        	}
-	        });
-			client.getSslContextFactory().setTrustAll(unsafeHttpClient);
+				}
+			};
+			HttpClient client = new HttpClient(transport);
+			
 			client.getProxyConfiguration().addProxy(new JoatseProxy(
-							new Origin.Address("localhost", switchboardPortListener.getAddress().getPort()), false,
-							null, null));
+					new Origin.Address("localhost", switchboardPortListener.getAddress().getPort()), false));
 			return client;
 		}
 
@@ -324,6 +353,15 @@ public class HttpProxyManager implements InitializingBean, DisposableBean {
 					log.info("Request {} {} for file tunnel {}", servletRequest.getMethod(),
 							servletRequest.getRequestURL(), fileTunnel.getTargetId());
 					handleFileRequest(servletRequest, servletResponse, fileTunnel);
+					return;
+				}
+				
+				// Check for folder tunnel
+				org.aalku.joatse.cloud.service.sharing.folder.FolderTunnel folderTunnel = sharingManager.getTunnelForFolderRequest(remoteAddress, serverPort, serverName, scheme, requestPath);
+				if (folderTunnel != null) {
+					log.info("Request {} {} for folder tunnel {}", servletRequest.getMethod(),
+							servletRequest.getRequestURL(), folderTunnel.getTargetId());
+					handleFolderRequest(servletRequest, servletResponse, folderTunnel);
 					return;
 				}
 				
@@ -393,15 +431,12 @@ public class HttpProxyManager implements InitializingBean, DisposableBean {
 				return;
 			}
 			
-			// Find the JWSSession for this tunnel's owner
-			Collection<org.aalku.joatse.cloud.service.JWSSession> sessions = 
-					joatseWsHandler.getSessions(fileTunnel.getSharedResourceLot().getOwner());
-			org.aalku.joatse.cloud.service.JWSSession jSession = sessions.stream()
-					.filter(s -> fileTunnel.getSharedResourceLot().equals(s.getSharedResourceLot()))
-					.findFirst()
-					.orElse(null);
+			// Authorization is already checked in TunnelRegistry.findMatchingFileTunnel()
+			// Get the FileSessionHandler from the SharedResourceLot
+			org.aalku.joatse.cloud.service.sharing.file.FileSessionHandler fileHandler = 
+					fileTunnel.getSharedResourceLot().getFileSessionHandler();
 			
-			if (jSession == null) {
+			if (fileHandler == null) {
 				log.warn("File request rejected: target session not connected for tunnel {}", fileTunnel.getTargetId());
 				servletResponse.sendError(503, "Service Unavailable - target not connected");
 				return;
@@ -440,321 +475,240 @@ public class HttpProxyManager implements InitializingBean, DisposableBean {
 			final jakarta.servlet.AsyncContext asyncContext = servletRequest.startAsync();
 			asyncContext.setTimeout(0); // No timeout - rely on inactivity timeout instead
 			
-			// Create file read connection
-			org.aalku.joatse.cloud.service.sharing.file.FileReadConnection fileConn = 
-					new org.aalku.joatse.cloud.service.sharing.file.FileReadConnection(fileTunnel, jSession, offset, length);
-			
-			log.info("Initiated async file request for {} {} (offset={}, length={})", 
-					method, fileTunnel.getTargetPath(), offset, length);
-			
 			final boolean finalIsRangeRequest = isRangeRequest;
 			final long finalLength = length;
+			final String finalMethod = method;
 			
-			// Handle metadata asynchronously
-			CompletableFuture<org.json.JSONObject> metadataFuture = fileConn.getMetadataAsync();
+			// Use FileSessionHandler to handle the async file read
+			org.aalku.joatse.cloud.service.sharing.file.FileSessionHandler.FileReadResult fileReadResult = 
+					fileHandler.readFileAsync(
+						fileTunnel,
+						offset,
+						length,
+						scheduler,
+						// Output stream for file data
+						servletResponse.getOutputStream()
+					);
 			
-			// Add timeout handling
-			scheduler.schedule(() -> {
-				if (!metadataFuture.isDone()) {
-					metadataFuture.completeExceptionally(new java.util.concurrent.TimeoutException("Metadata timeout"));
+			// Handle metadata future
+			fileReadResult.metadata().whenComplete((metadata, metadataError) -> {
+				if (metadataError != null) {
+					log.error("Error getting metadata for {}: {}", fileTunnel.getTargetPath(), metadataError.getMessage(), metadataError);
+					handleAsyncError(asyncContext, servletResponse, 
+							"Error getting file metadata", 500);
+					return;
 				}
-			}, 30, TimeUnit.SECONDS);
-			
-			metadataFuture.whenComplete((metadata, metadataError) -> {
-					if (metadataError != null) {
-						log.error("Error getting metadata for {}: {}", fileTunnel.getTargetPath(), metadataError.getMessage());
-						handleAsyncError(asyncContext, servletResponse, fileConn, jSession, 
-								"Timeout or error waiting for file metadata", 500);
+				
+				try {
+					// Extract file information from metadata
+					String fileName = metadata.optString("fileName", fileHandler.extractFilename(fileTunnel.getTargetPath()));
+					long fileSize = metadata.optLong("fileSize", -1);
+					String contentType = metadata.optString("contentType", MimeTypeUtil.guessContentType(fileName));
+					
+					// Set response headers
+					servletResponse.setHeader("Accept-Ranges", "bytes");
+					servletResponse.setContentType(contentType);
+					
+					if (metadata.has("lastModified")) {
+						long lastModified = metadata.getLong("lastModified");
+						servletResponse.setDateHeader("Last-Modified", lastModified);
+					}
+					
+					// Handle HEAD request (return headers only)
+					if (finalMethod.equals("HEAD")) {
+						if (fileSize >= 0) {
+							servletResponse.setContentLengthLong(fileSize);
+						}
+						servletResponse.setStatus(200);
 						return;
 					}
 					
-					try {
-						// Check for error in metadata
-						if (metadata.has("error")) {
-							String error = metadata.getString("error");
-							log.warn("File request failed: {}", error);
-							int statusCode = 500;
-							if (error.contains("not found") || error.contains("does not exist")) {
-								statusCode = 404;
-							} else if (error.contains("permission") || error.contains("access denied")) {
-								statusCode = 403;
-							}
-							handleAsyncError(asyncContext, servletResponse, fileConn, jSession, error, statusCode);
-							return;
+					// Handle range request
+					if (finalIsRangeRequest && fileSize >= 0) {
+						long rangeEnd = (finalLength == -1) ? fileSize - 1 : offset + finalLength - 1;
+						if (rangeEnd >= fileSize) {
+							rangeEnd = fileSize - 1;
 						}
+						long contentLength = rangeEnd - offset + 1;
 						
-						// Extract file information from metadata
-						String fileName = metadata.optString("fileName", extractFilename(fileTunnel.getTargetPath()));
-						long fileSize = metadata.optLong("fileSize", -1);
-						String contentType = metadata.optString("contentType", guessContentType(fileName));
-						
-						// Set response headers
-						servletResponse.setHeader("Accept-Ranges", "bytes");
-						servletResponse.setContentType(contentType);
-						
-						if (metadata.has("lastModified")) {
-							long lastModified = metadata.getLong("lastModified");
-							servletResponse.setDateHeader("Last-Modified", lastModified);
-						}
-						
-						// Handle HEAD request (return headers only)
-						if (method.equals("HEAD")) {
-							if (fileSize >= 0) {
-								servletResponse.setContentLengthLong(fileSize);
-							}
-							servletResponse.setStatus(200);
-							cleanupAndComplete(asyncContext, fileConn, jSession);
-							return;
-						}
-						
-						// Handle range request
-						if (finalIsRangeRequest && fileSize >= 0) {
-							long rangeEnd = (finalLength == -1) ? fileSize - 1 : offset + finalLength - 1;
-							if (rangeEnd >= fileSize) {
-								rangeEnd = fileSize - 1;
-							}
-							long contentLength = rangeEnd - offset + 1;
-							
-							servletResponse.setStatus(206); // Partial Content
-							servletResponse.setHeader("Content-Range", 
-									String.format("bytes %d-%d/%d", offset, rangeEnd, fileSize));
-							servletResponse.setContentLengthLong(contentLength);
-						} else {
-							servletResponse.setStatus(200);
-							if (fileSize >= 0) {
-								servletResponse.setContentLengthLong(fileSize);
-							}
-						}
-						
-						// Stream file data asynchronously
-						streamFileDataAsync(asyncContext, servletResponse, fileConn, jSession, 
-								fileTunnel, finalLength, offset);
-						
-					} catch (Exception e) {
-						log.error("Error processing metadata for {}: {}", fileTunnel.getTargetPath(), e.getMessage(), e);
-						handleAsyncError(asyncContext, servletResponse, fileConn, jSession, 
-								"Error processing file metadata", 500);
-					}
-				});
-		}
-		
-		private void streamFileDataAsync(jakarta.servlet.AsyncContext asyncContext,
-				HttpServletResponse servletResponse,
-				org.aalku.joatse.cloud.service.sharing.file.FileReadConnection fileConn,
-				org.aalku.joatse.cloud.service.JWSSession jSession,
-				org.aalku.joatse.cloud.service.sharing.file.FileTunnel fileTunnel,
-				long targetLength, long offset) {
-			
-			try {
-				final java.io.OutputStream out = servletResponse.getOutputStream();
-				final long[] bytesWritten = {0};
-				final java.util.concurrent.atomic.AtomicBoolean completed = new java.util.concurrent.atomic.AtomicBoolean(false);
-				final java.util.concurrent.ScheduledFuture<?>[] timeoutTask = new java.util.concurrent.ScheduledFuture<?>[1];
-				
-				// Schedule timeout for inactivity
-				final Runnable resetTimeout = () -> {
-					if (timeoutTask[0] != null) {
-						timeoutTask[0].cancel(false);
-					}
-					timeoutTask[0] = scheduler.schedule(() -> {
-						if (!completed.get()) {
-							log.warn("Timeout: No data received for 30 seconds for file {}", fileTunnel.getTargetPath());
-							handleAsyncError(asyncContext, servletResponse, fileConn, jSession,
-									"Timeout waiting for file data", 500);
-							completed.set(true);
-						}
-					}, 30, TimeUnit.SECONDS);
-				};
-				
-				// Set up data consumer
-				fileConn.setDataConsumer(dataBuffer -> {
-					if (completed.get()) {
-						return;
-					}
-					try {
-						resetTimeout.run(); // Reset timeout on each chunk
-						
-						// Write chunk to HTTP response
-						byte[] bytes = new byte[dataBuffer.remaining()];
-						dataBuffer.get(bytes);
-						out.write(bytes);
-						out.flush(); // Flush immediately so browser starts downloading
-						bytesWritten[0] += bytes.length;
-						
-						// Check if we've written enough for range request
-						if (targetLength > 0 && bytesWritten[0] >= targetLength) {
-							log.info("File download completed: {} bytes written for {} (target reached)",
-									bytesWritten[0], fileTunnel.getTargetPath());
-							if (timeoutTask[0] != null) {
-								timeoutTask[0].cancel(false);
-							}
-							completed.set(true);
-							out.flush();
-							cleanupAndComplete(asyncContext, fileConn, jSession);
-						}
-					} catch (IOException e) {
-						log.error("Error writing data chunk for {}: {}", fileTunnel.getTargetPath(), e.getMessage());
-						if (timeoutTask[0] != null) {
-							timeoutTask[0].cancel(false);
-						}
-						completed.set(true);
-						handleAsyncError(asyncContext, servletResponse, fileConn, jSession,
-								"Error writing response", 500);
-					}
-				});
-				
-				// Set up EOF callback
-				fileConn.setEofCallback(() -> {
-					if (!completed.get()) {
-						try {
-							if (timeoutTask[0] != null) {
-								timeoutTask[0].cancel(false);
-							}
-							completed.set(true);
-							out.flush();
-							log.info("File download completed: {} bytes written for {} (EOF)",
-									bytesWritten[0], fileTunnel.getTargetPath());
-							cleanupAndComplete(asyncContext, fileConn, jSession);
-						} catch (IOException e) {
-							log.error("Error flushing output for {}: {}", fileTunnel.getTargetPath(), e.getMessage());
-							handleAsyncError(asyncContext, servletResponse, fileConn, jSession,
-									"Error completing response", 500);
+						servletResponse.setStatus(206); // Partial Content
+						servletResponse.setHeader("Content-Range",
+								"bytes %d-%d/%d".formatted(offset, rangeEnd, fileSize));
+						servletResponse.setContentLengthLong(contentLength);
+					} else {
+						servletResponse.setStatus(200);
+						if (fileSize >= 0) {
+							servletResponse.setContentLengthLong(fileSize);
 						}
 					}
-				});
-				
-				// Set up error callback
-				fileConn.setErrorCallback(error -> {
-					if (!completed.get()) {
-						if (timeoutTask[0] != null) {
-							timeoutTask[0].cancel(false);
-						}
-						completed.set(true);
-						log.error("Error during file transfer for {}: {}", fileTunnel.getTargetPath(), error.getMessage());
-						handleAsyncError(asyncContext, servletResponse, fileConn, jSession,
-								"Error reading file data", 500);
-					}
-				});
-				
-				// Start the initial timeout
-				resetTimeout.run();
-				
-			} catch (IOException e) {
-				log.error("Error getting output stream for {}: {}", fileTunnel.getTargetPath(), e.getMessage());
-				handleAsyncError(asyncContext, servletResponse, fileConn, jSession,
-						"Error getting response output stream", 500);
-			}
-		}
-		
-		private void handleAsyncError(jakarta.servlet.AsyncContext asyncContext,
-				HttpServletResponse servletResponse,
-				org.aalku.joatse.cloud.service.sharing.file.FileReadConnection fileConn,
-				org.aalku.joatse.cloud.service.JWSSession jSession,
-				String message, int statusCode) {
-			try {
-				if (!servletResponse.isCommitted()) {
-					servletResponse.sendError(statusCode, message);
-				}
-			} catch (IOException e) {
-				log.error("Error sending error response: {}", e.getMessage());
-			} finally {
-				cleanupAndComplete(asyncContext, fileConn, jSession);
-			}
-		}
-		
-		private void cleanupAndComplete(jakarta.servlet.AsyncContext asyncContext,
-				org.aalku.joatse.cloud.service.sharing.file.FileReadConnection fileConn,
-				org.aalku.joatse.cloud.service.JWSSession jSession) {
-			try {
-				jSession.remove(fileConn);
-				fileConn.close();
-			} catch (Exception e) {
-				log.warn("Error cleaning up file connection: {}", e.getMessage());
-			} finally {
-				try {
-					asyncContext.complete();
+					
+					// Data streaming will be handled by FileSessionHandler
 				} catch (Exception e) {
-					log.warn("Error completing async context: {}", e.getMessage());
+					log.error("Error processing metadata for {}: {}", fileTunnel.getTargetPath(), e.getMessage(), e);
+					handleAsyncError(asyncContext, servletResponse, 
+							"Error processing file metadata", 500);
+				}
+			});
+			
+			// Handle completion future
+			fileReadResult.completion().whenComplete((result, error) -> {
+				if (error != null) {
+					String errorMsg = error.getMessage();
+					int statusCode = 500;
+					if (errorMsg != null && (errorMsg.contains("not found") || errorMsg.contains("does not exist"))) {
+						statusCode = 404;
+					} else if (errorMsg != null && (errorMsg.contains("permission") || errorMsg.contains("access denied"))) {
+						statusCode = 403;
+					}
+					handleAsyncError(asyncContext, servletResponse, 
+							errorMsg != null ? errorMsg : "Unknown error", statusCode);
+				} else {
+					completeAsyncContext(asyncContext);
+				}
+			});
+		}
+		
+/**
+	 * Handles errors during async servlet request processing by sending an error response
+	 * and completing the async context. This method ensures the async request is always
+	 * properly terminated, even if sending the error response fails.
+	 * 
+	 * @param asyncContext The Jakarta Servlet AsyncContext to complete
+	 * @param servletResponse The HTTP response to send the error to
+	 * @param message The error message to include in the response
+	 * @param statusCode The HTTP status code for the error (e.g., 404, 500)
+	 */
+	private void handleAsyncError(jakarta.servlet.AsyncContext asyncContext,
+			HttpServletResponse servletResponse,
+		String message, int statusCode) {
+	try {
+		if (!servletResponse.isCommitted()) {
+			servletResponse.sendError(statusCode, message);
+		}
+	} catch (IOException e) {
+		log.error("Error sending error response: {}", e.getMessage());
+	} finally {
+		completeAsyncContext(asyncContext);
+	}
+}
+
+/**
+ * Safely completes a Jakarta Servlet AsyncContext, catching and logging any exceptions
+ * that occur during completion. This is a helper method to ensure async requests are
+ * always properly terminated without throwing exceptions to the caller.
+ * 
+ * @param asyncContext The Jakarta Servlet AsyncContext to complete
+ */
+	private void completeAsyncContext(jakarta.servlet.AsyncContext asyncContext) {
+		try {
+			asyncContext.complete();
+		} catch (Exception e) {
+			log.warn("Error completing async context: {}", e.getMessage());
+		}
+	}
+	
+	private void handleFolderRequest(HttpServletRequest servletRequest, HttpServletResponse servletResponse,
+				org.aalku.joatse.cloud.service.sharing.folder.FolderTunnel folderTunnel) throws IOException {
+			
+			// Authorization is already checked in TunnelRegistry.findMatchingFolderTunnel()
+			// Get the FolderSessionHandler from the SharedResourceLot
+			org.aalku.joatse.cloud.service.sharing.folder.FolderSessionHandler folderHandler = 
+					folderTunnel.getSharedResourceLot().getFolderSessionHandler();
+			
+			if (folderHandler == null) {
+				log.warn("Folder request rejected: target session not connected for tunnel {}", folderTunnel.getTargetId());
+				servletResponse.sendError(503, "Service Unavailable - target not connected");
+				return;
+			}
+
+			// Parse the request path to extract operation and file path
+			// Expected format: /{path-hash}/{folder-name}/api/{operation}?path=/file.txt
+			// or: /api/{operation}?path=/file.txt (for dynamic subdomain)
+			String requestPath = servletRequest.getRequestURI();
+			String operation = extractOperationFromPath(requestPath);
+			String filePath = servletRequest.getParameter("path");
+			
+			if (operation == null) {
+				// Serve web file browser UI
+				serveFileBrowserUI(servletRequest, servletResponse, folderTunnel);
+				return;
+			}
+			
+			// Delegate to FolderSessionHandler for operation handling
+			folderHandler.handleFolderOperation(servletRequest, servletResponse, folderTunnel, operation, filePath);
+		}
+		
+		private String extractOperationFromPath(String requestPath) {
+			// Match pattern: .../api/{operation}
+			Pattern pattern = Pattern.compile("/api/([^/?]+)");
+			Matcher matcher = pattern.matcher(requestPath);
+			if (matcher.find()) {
+				return matcher.group(1);
+			}
+			return null;
+		}
+		
+		private void serveFileBrowserUI(HttpServletRequest servletRequest, HttpServletResponse servletResponse,
+				org.aalku.joatse.cloud.service.sharing.folder.FolderTunnel folderTunnel) throws IOException {
+			
+			String requestPath = servletRequest.getRequestURI();
+			
+			// Check if requesting static UI assets
+			if (requestPath.endsWith("/folder-ui.css")) {
+				serveStaticAsset(servletRequest, servletResponse, "folder-ui.css", "text/css");
+				return;
+			} else if (requestPath.endsWith("/folder-ui.js")) {
+				serveStaticAsset(servletRequest, servletResponse, "folder-ui.js", "application/javascript");
+				return;			
+			} else if (requestPath.contains("/css/") || requestPath.contains("/lib/")) { // Check for CSS and lib directory assets
+				String assetPath = null;
+				String contentType = null;
+				
+				// Extract the path after /css/ or /lib/
+				if (requestPath.contains("/css/")) {
+					int cssIndex = requestPath.indexOf("/css/");
+					assetPath = requestPath.substring(cssIndex + 1); // Remove leading /
+					contentType = "text/css";
+				} else if (requestPath.contains("/lib/")) {
+					int libIndex = requestPath.indexOf("/lib/");
+					assetPath = requestPath.substring(libIndex + 1); // Remove leading /
+					
+					// Determine content type based on file extension
+					if (assetPath.endsWith(".js")) {
+						contentType = "application/javascript";
+					} else if (assetPath.endsWith(".css")) {
+						contentType = "text/css";
+					} else if (assetPath.endsWith(".map")) {
+						contentType = "application/json";
+					} else {
+						contentType = "application/octet-stream";
+					}
+				}
+				
+				if (assetPath != null) {
+					serveStaticAsset(servletRequest, servletResponse, assetPath, contentType);
+					return;
 				}
 			}
+			serveStaticAsset(servletRequest, servletResponse, "folder-ui.html", "text/html");
 		}
 		
-		private String extractFilename(String path) {
-			if (path == null || path.isEmpty()) {
-				return "file";
+		private void serveStaticAsset(HttpServletRequest servletRequest, HttpServletResponse servletResponse,
+				String fileName, String contentType) throws IOException {
+			servletResponse.setContentType(contentType + ";charset=UTF-8");
+			try (InputStream is = getClass().getClassLoader().getResourceAsStream("static/" + fileName)) {
+				if (is == null) {
+					servletResponse.sendError(404, "Static asset not found: " + fileName);
+					return;
+				}
+				// Prevent caching to ensure changes are reflected immediately
+				servletResponse.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+				servletResponse.setHeader("Pragma", "no-cache");
+				servletResponse.setDateHeader("Expires", 0);
+				servletResponse.getOutputStream().write(is.readAllBytes());
 			}
-			int lastSlash = path.lastIndexOf('/');
-			if (lastSlash >= 0 && lastSlash < path.length() - 1) {
-				return path.substring(lastSlash + 1);
-			}
-			return path;
 		}
 		
-		private String guessContentType(String fileName) {
-			if (fileName == null) {
-				return "application/octet-stream";
-			}
-			String lower = fileName.toLowerCase();
-			
-			// Text formats
-			if (lower.endsWith(".txt")) return "text/plain";
-			if (lower.endsWith(".html") || lower.endsWith(".htm")) return "text/html";
-			if (lower.endsWith(".css")) return "text/css";
-			if (lower.endsWith(".csv")) return "text/csv";
-			if (lower.endsWith(".log")) return "text/plain";
-			
-			// Data formats
-			if (lower.endsWith(".json")) return "application/json";
-			if (lower.endsWith(".xml")) return "application/xml";
-			
-			// Documents
-			if (lower.endsWith(".pdf")) return "application/pdf";
-			
-			// Images
-			if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
-			if (lower.endsWith(".png")) return "image/png";
-			if (lower.endsWith(".gif")) return "image/gif";
-			if (lower.endsWith(".svg")) return "image/svg+xml";
-			if (lower.endsWith(".ico")) return "image/x-icon";
-			if (lower.endsWith(".webp")) return "image/webp";
-			if (lower.endsWith(".bmp")) return "image/bmp";
-			
-			// Video formats
-			if (lower.endsWith(".mp4")) return "video/mp4";
-			if (lower.endsWith(".webm")) return "video/webm";
-			if (lower.endsWith(".ogg") || lower.endsWith(".ogv")) return "video/ogg";
-			if (lower.endsWith(".avi")) return "video/x-msvideo";
-			if (lower.endsWith(".mov")) return "video/quicktime";
-			if (lower.endsWith(".mkv")) return "video/x-matroska";
-			
-			// Audio formats
-			if (lower.endsWith(".mp3")) return "audio/mpeg";
-			if (lower.endsWith(".wav")) return "audio/wav";
-			if (lower.endsWith(".oga")) return "audio/ogg";
-			if (lower.endsWith(".m4a")) return "audio/mp4";
-			if (lower.endsWith(".aac")) return "audio/aac";
-			if (lower.endsWith(".flac")) return "audio/flac";
-			
-			// Web fonts
-			if (lower.endsWith(".woff")) return "font/woff";
-			if (lower.endsWith(".woff2")) return "font/woff2";
-			if (lower.endsWith(".ttf")) return "font/ttf";
-			if (lower.endsWith(".otf")) return "font/otf";
-			if (lower.endsWith(".eot")) return "application/vnd.ms-fontobject";
-			
-			// JavaScript
-			if (lower.endsWith(".js") || lower.endsWith(".mjs")) return "application/javascript";
-			
-			// Archives
-			if (lower.endsWith(".zip")) return "application/zip";
-			if (lower.endsWith(".gz")) return "application/gzip";
-			if (lower.endsWith(".tar")) return "application/x-tar";
-			if (lower.endsWith(".rar")) return "application/vnd.rar";
-			if (lower.endsWith(".7z")) return "application/x-7z-compressed";
-			
-			return "application/octet-stream";
-		}
-
 		private void websocketUpgrade(HttpServletRequest servletRequest,
 				HttpServletResponse servletResponse, HttpTunnel httpTunnel)
 				throws UnknownHostException, IOException, URISyntaxException, MalformedURLException, ServletException,
@@ -769,10 +723,10 @@ public class HttpProxyManager implements InitializingBean, DisposableBean {
 			JettyWebSocketServerContainer container = JettyWebSocketServerContainer
 					.getContainer(servletContext);
 			
-			URI mappedUri = setWebSocketScheme(new URI(rewriteUrl(new URL(servletRequest.getRequestURL().toString()), httpTunnel)));
+			URI mappedUri = setWebSocketScheme(new URI(rewriteUrl(URI.create(servletRequest.getRequestURL().toString()).toURL(), httpTunnel)));
 
-			log.debug(String.format("WebSockets proxy connection to %s", mappedUri));
-			ClientUpgradeRequest clientUpgradeRequest = newProxyClientUpgradeRequest(servletRequest, httpTunnel);
+			log.debug("WebSockets proxy connection to %s".formatted(mappedUri));
+			ClientUpgradeRequest clientUpgradeRequest = newProxyClientUpgradeRequest(mappedUri, servletRequest, httpTunnel);
 			WebSocketClient client = newWsClient();
 			
 			ServerSideWsHandler serverSideWsHandler = new ServerSideWsHandler();
@@ -781,16 +735,15 @@ public class HttpProxyManager implements InitializingBean, DisposableBean {
 			clientSideHandler.getSession().thenAccept(s->{
 				serverSideWsHandler.setTextMessageHandler(m->{
 					try {
-						s.getRemote().sendString(m);
-					} catch (IOException e) {
-						// TODO Auto-generated catch block
+						s.sendText(m, Callback.NOOP);
+					} catch (Exception e) {
 						e.printStackTrace();
 					}
 				});
 				serverSideWsHandler.setBinaryMessageHandler(binaryData->{
 					try {
-						s.getRemote().sendBytes(ByteBuffer.wrap(binaryData));
-					} catch (IOException e) {
+						s.sendBinary(ByteBuffer.wrap(binaryData), Callback.NOOP);
+					} catch (Exception e) {
 						e.printStackTrace();
 					}
 				});
@@ -798,23 +751,22 @@ public class HttpProxyManager implements InitializingBean, DisposableBean {
 			serverSideWsHandler.getSession().thenAccept(s->{
 				clientSideHandler.setTextMessageHandler(m->{
 					try {
-						s.getRemote().sendString(m);
-					} catch (IOException e) {
-						// TODO Auto-generated catch block
+						s.sendText(m, Callback.NOOP);
+					} catch (Exception e) {
 						e.printStackTrace();
 					}
 				});
 				clientSideHandler.setBinaryMessageHandler(binaryData->{
 					try {
-						s.getRemote().sendBytes(ByteBuffer.wrap(binaryData));
-					} catch (IOException e) {
+						s.sendBinary(ByteBuffer.wrap(binaryData), Callback.NOOP);
+					} catch (Exception e) {
 						e.printStackTrace();
 					}
 				});
 			});
 			
 			
-			CompletableFuture<Session> futureConnect = client.connect(clientSideHandler, mappedUri, clientUpgradeRequest);
+			CompletableFuture<Session> futureConnect = client.connect(clientSideHandler, clientUpgradeRequest);
 			boolean clientConnected = futureConnect.handle((s,e)->{
 					if (e != null) {
 						IOTools.runFailable(()->client.stop());
@@ -847,7 +799,14 @@ public class HttpProxyManager implements InitializingBean, DisposableBean {
 		}
 
 		private WebSocketClient newWsClient() throws ServletException {
-			WebSocketClient client = new WebSocketClient(newHttpClient());
+			HttpClient httpClient = newHttpClient();
+			try {
+				httpClient.start();
+			} catch (Exception e) {
+				throw new ServletException("Error starting HTTP client for WebSocket", e);
+			}
+			
+			WebSocketClient client = new WebSocketClient(httpClient);
 			wsClients.add(new WeakReference<WebSocketClient>(client));
 			try {
 				client.setStopAtShutdown(false); // <- Prevents GC
@@ -894,20 +853,25 @@ public class HttpProxyManager implements InitializingBean, DisposableBean {
 		}
 
 		@Override
-		protected HttpRequest newProxyRequest(HttpServletRequest request, String rewrittenTarget) {
-			HttpRequest proxyRequest = (HttpRequest) super.newProxyRequest(request, rewrittenTarget);
+		protected Request newProxyRequest(HttpServletRequest request, String rewrittenTarget) {
+			log.warn("DEBUG: newProxyRequest called - rewrittenTarget={}", rewrittenTarget);
+			Request proxyRequest = super.newProxyRequest(request, rewrittenTarget);
 			HttpTunnel hTunnel = (HttpTunnel) request.getAttribute(REQUEST_KEY_HTTPTUNNEL);
+			log.warn("DEBUG: newProxyRequest - tunnel from attribute: {}", hTunnel != null ? hTunnel.getTargetId() : "null");
 			if (hTunnel == null) {
 				log.warn("request attribute REQUEST_KEY_HTTPTUNNEL is null");
 			}
 			if (hTunnel != null) {
+				proxyRequest.attribute(REQUEST_KEY_HTTPTUNNEL, hTunnel);
+				// Set tag for destination routing - this flows to Origin.getTag() in Jetty 12
 				proxyRequest.tag(hTunnel);
+				log.warn("DEBUG: newProxyRequest - tagged proxyRequest with tunnel {}", hTunnel.getTargetId());
 			}
 			return proxyRequest;
 		}
 		
-		protected ClientUpgradeRequest newProxyClientUpgradeRequest(HttpServletRequest servletRequest, HttpTunnel hTunnel) {
-			ClientUpgradeRequest res = new ClientUpgradeRequest();
+		protected ClientUpgradeRequest newProxyClientUpgradeRequest(URI targetUri, HttpServletRequest servletRequest, HttpTunnel hTunnel) {
+			ClientUpgradeRequest res = new ClientUpgradeRequest(targetUri);
 			Map<String, List<String>> reqHeaders = Collections.list(servletRequest.getHeaderNames()).stream()
 					.collect(Collectors.toMap(k -> k, k -> Collections.list(servletRequest.getHeaders(k))));
 			// rewrite urls in headers
@@ -981,7 +945,7 @@ public class HttpProxyManager implements InitializingBean, DisposableBean {
 						.collect(Collectors.toList());
 				String prefix = COOKIE_JOATSE_HTTP_TUNNEL_TARGET_ID + "=";
 				Optional<String> targetIdCookie = cookies.stream().filter(c->c.startsWith(prefix)).map(c->c.substring(prefix.length())).findFirst();
-				if (!targetIdCookie.isPresent() || !targetIdCookie.get().equals(hTunnel.getTargetId() + "")) {
+				if (targetIdCookie.isEmpty() || !targetIdCookie.get().equals(hTunnel.getTargetId() + "")) {
 					// Domain change. Clear all cookies here and delete them in the response
 					List<String> cookieNames = cookies.stream().map(c->c.split("=",2)[0]).filter(c->!c.equals(COOKIE_JOATSE_HTTP_TUNNEL_TARGET_ID)).collect(Collectors.toList());
 					clientRequest.setAttribute(REQUEST_KEY_JOATSE_CLEAR_COOKIES, new ArrayList<>(cookieNames));
@@ -1000,25 +964,57 @@ public class HttpProxyManager implements InitializingBean, DisposableBean {
 
 		@Override
 		protected String rewriteTarget(HttpServletRequest clientRequest) {
-			if (!validateDestination(clientRequest.getServerName(), clientRequest.getServerPort()))
+			log.warn("DEBUG: rewriteTarget called for {}", clientRequest.getRequestURL());
+			if (!validateDestination(clientRequest.getServerName(), clientRequest.getServerPort())) {
+				log.warn("DEBUG: rewriteTarget - validateDestination returned false for {}:{}", 
+						clientRequest.getServerName(), clientRequest.getServerPort());
 				return null;
+			}
 			try {
 				String urlString = getRequestUrl(clientRequest);
-				URL clientURL = new URL(urlString);
+				URL clientURL = URI.create(urlString).toURL();
 
 				HttpTunnel tunnel = (HttpTunnel) clientRequest.getAttribute(REQUEST_KEY_HTTPTUNNEL);
+				log.warn("DEBUG: rewriteTarget - tunnel from attribute: {}", tunnel != null ? tunnel.getTargetId() : "null");
+				if (tunnel == null) {
+					log.error("DEBUG: rewriteTarget - REQUEST_KEY_HTTPTUNNEL is null! Returning null.");
+					return null;
+				}
 				String targetUrl = rewriteUrl(clientURL, tunnel);
 				log.info("Proxying {} to {}", clientURL, targetUrl);
 				return targetUrl;
 			} catch (MalformedURLException e) {
+				log.error("DEBUG: rewriteTarget - MalformedURLException: {}", e.getMessage());
 				throw new RuntimeException(e);
 			}
 		}
 
+		@Override
+		protected void onProxyRewriteFailed(HttpServletRequest clientRequest, HttpServletResponse proxyResponse) {
+			log.error("DEBUG: onProxyRewriteFailed called for {} - this means rewriteTarget returned null!", 
+					clientRequest.getRequestURL());
+			super.onProxyRewriteFailed(clientRequest, proxyResponse);
+		}
+
+		@Override
+		protected void onProxyResponseFailure(HttpServletRequest clientRequest, HttpServletResponse proxyResponse,
+				Response serverResponse, Throwable failure) {
+			log.error("DEBUG: onProxyResponseFailure called for {} - failure: {}", 
+					clientRequest.getRequestURL(), failure != null ? failure.getMessage() : "null");
+			super.onProxyResponseFailure(clientRequest, proxyResponse, serverResponse, failure);
+		}
+
 		private String rewriteUrl(URL clientURL, HttpTunnel tunnel) throws MalformedURLException {
-			String targetUrl = new URL(tunnel.getTargetProtocol(), tunnel.getTargetDomain(),
-					tunnel.getTargetPort(), clientURL.getFile()).toExternalForm();
-			return targetUrl;
+			try {
+				// Use path and query separately - clientURL.getFile() contains both but URI constructor
+				// will URL-encode the query string if passed as part of the path (turning ? into %3F)
+				String path = clientURL.getPath();
+				String query = clientURL.getQuery();
+				String targetUrl = new URI(tunnel.getTargetProtocol(), null, tunnel.getTargetDomain(), tunnel.getTargetPort(), path, query, null).toURL().toExternalForm();
+				return targetUrl;
+			} catch (URISyntaxException e) {
+				throw new MalformedURLException(e.getMessage());
+			}
 		}
 
 		@Override
@@ -1096,13 +1092,7 @@ public class HttpProxyManager implements InitializingBean, DisposableBean {
 		protected ContentTransformer newClientRequestContentTransformer(HttpServletRequest clientRequest,
 				Request proxyRequest) {
 			log.info("newClientRequestContentTransformer()");
-			return new AfterContentTransformer() {
-				@Override
-				public boolean transform(Source source, Sink sink) throws IOException {
-					log.info("transform.request {}", proxyRequest.getURI());
-					return false; // TODO
-				}
-			};
+			return ContentTransformer.IDENTITY;
 		}
 
 		@Override
@@ -1110,73 +1100,107 @@ public class HttpProxyManager implements InitializingBean, DisposableBean {
 				HttpServletResponse proxyResponse, Response serverResponse) {
 			HttpTunnel httpTunnel = (HttpTunnel) clientRequest.getAttribute(REQUEST_KEY_HTTPTUNNEL);
 			SharedResourceLot tunnel = httpTunnel.getTunnel();
-			URL clientRequestUrl = IOTools.runUnchecked(()->new URL(serverResponse.getRequest().getURI().toString()));
-			URL proxyRequestUrl = IOTools.runUnchecked(()->new URL(clientRequest.getRequestURL().toString()));
+			URL clientRequestUrl = IOTools.runUnchecked(()->URI.create(serverResponse.getRequest().getURI().toString()).toURL());
+			URL proxyRequestUrl = IOTools.runUnchecked(()->URI.create(clientRequest.getRequestURL().toString()).toURL());
 
-			return new AfterContentTransformer() {
-				@Override
-				public boolean transform(Source source, Sink sink) throws IOException {
-					String contentType = proxyResponse.getContentType();
-					String contentEncoding = Optional.ofNullable(proxyResponse.getHeader("Content-Encoding")).orElse("identity");
-					if (Arrays.asList("identity", "gzip").contains(contentEncoding) && contentType != null
-							&& PATTERN_CONTENT_TYPE_TEXT.matcher(contentType).matches()) {
-						log.info("transform.response {}: {}-->{} {} {}", 
-								tunnel.getUuid(),
-								proxyRequestUrl,
-								clientRequestUrl,
-								contentType,
-								contentEncoding);
-						Charset charset = Charset.forName(proxyResponse.getCharacterEncoding());
-
-						InputStream ins = wrap(contentEncoding, source.getInputStream());
-						OutputStream outs = wrap(contentEncoding, sink.getOutputStream());
-						BufferedReader in = new BufferedReader(new InputStreamReader(ins, charset));
-						PrintWriter out = new PrintWriter(new OutputStreamWriter(new BufferedOutputStream(outs), charset));
-						CharBuffer buffer = CharBuffer.allocate(1024 * 100);
-						while (true) {
-							int r = in.read(buffer);
-							if (r < 0) {
-								IOTools.rewriteStringContent(buffer, out, true, PATTERN_URL_PREFFIX, httpTunnel.getUrlRewriteFunction());
-								in.close();
-								out.close();
-								return true;
-							} else {
-								if (r > 0 && buffer.hasRemaining()) {
-									continue; // Buffer must be full if not last
-								}
-								IOTools.rewriteStringContent(buffer, out, false, PATTERN_URL_PREFFIX, httpTunnel.getUrlRewriteFunction());
-							}
+			String contentType = proxyResponse.getContentType();
+			String contentEncoding = Optional.ofNullable(proxyResponse.getHeader("Content-Encoding")).orElse("identity");
+			
+			if (Arrays.asList("identity", "gzip").contains(contentEncoding) && contentType != null
+					&& PATTERN_CONTENT_TYPE_TEXT.matcher(contentType).matches()) {
+				log.info("transform.response {}: {}-->{} {} {}", 
+						tunnel.getUuid(),
+						proxyRequestUrl,
+						clientRequestUrl,
+						contentType,
+						contentEncoding);
+				
+				return new ContentTransformer() {
+					private final List<byte[]> accumulated = new ArrayList<>();
+					
+					@Override
+					public void transform(ByteBuffer input, boolean finished, List<ByteBuffer> output) throws IOException {
+						// Accumulate input data
+						if (input.hasRemaining()) {
+							byte[] data = new byte[input.remaining()];
+							input.get(data);
+							accumulated.add(data);
 						}
-					} else {
-						log.info("transform.response can't rewrite {}-->{} {} {}", 
-								proxyRequestUrl,
-								clientRequestUrl,
-								contentType,
-								contentEncoding);
-						return false;
+						
+						if (finished) {
+							// Combine all accumulated data
+							int totalSize = accumulated.stream().mapToInt(a -> a.length).sum();
+							byte[] allData = new byte[totalSize];
+							int offset = 0;
+							for (byte[] chunk : accumulated) {
+								System.arraycopy(chunk, 0, allData, offset, chunk.length);
+								offset += chunk.length;
+							}
+							
+							Charset charset = Charset.forName(proxyResponse.getCharacterEncoding());
+							
+							// Handle gzip decompression if needed
+							byte[] decompressed;
+							if (contentEncoding.equals("gzip") && allData.length > 0) {
+								try (GZIPInputStream gis = new GZIPInputStream(new java.io.ByteArrayInputStream(allData));
+									 java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream()) {
+									byte[] buffer = new byte[8192];
+									int len;
+									while ((len = gis.read(buffer)) > 0) {
+										baos.write(buffer, 0, len);
+									}
+									decompressed = baos.toByteArray();
+								}
+							} else {
+								decompressed = allData;
+							}
+							
+							// Transform text content
+							String text = new String(decompressed, charset);
+							CharBuffer buffer = CharBuffer.allocate(text.length() + 1024);
+							buffer.put(text);
+							
+							StringWriter out = new StringWriter();
+							IOTools.rewriteStringContent(buffer, new PrintWriter(out), true, 
+									PATTERN_URL_PREFFIX, httpTunnel.getUrlRewriteFunction());
+							
+							byte[] transformed = out.toString().getBytes(charset);
+							
+							// Handle gzip compression if needed
+							byte[] finalData;
+							if (contentEncoding.equals("gzip")) {
+								try (java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+									 GZIPOutputStream gos = new GZIPOutputStream(baos)) {
+									gos.write(transformed);
+									gos.finish();
+									finalData = baos.toByteArray();
+								}
+							} else {
+								finalData = transformed;
+							}
+							
+							output.add(ByteBuffer.wrap(finalData));
+						}
 					}
-				}
-				private OutputStream wrap(String contentEncoding, OutputStream out) throws IOException {
-					if (contentEncoding.equals("gzip")) {
-						return new GZIPOutputStream(out);
-					}
-					return out;
-				}
-				private InputStream wrap(String contentEncoding, InputStream in) throws IOException {
-					if (contentEncoding.equals("gzip")) {
-						return new GZIPInputStream(in);
-					}
-					return in;
-				}
-			};
+				};
+			} else {
+				log.info("transform.response can't rewrite {}-->{} {} {}", 
+						proxyRequestUrl,
+						clientRequestUrl,
+						contentType,
+						contentEncoding);
+				return ContentTransformer.IDENTITY;
+			}
 		}
 	}
 
-	private static final class JoatseProxy extends Proxy {
+	/**
+	 * Jetty 12 Proxy implementation for Joatse switchboard routing
+	 */
+	private static final class JoatseProxy extends org.eclipse.jetty.client.ProxyConfiguration.Proxy {
 
-		private JoatseProxy(Address address, boolean secure, SslContextFactory.Client sslContextFactory,
-				Protocol protocol) {
-			super(address, secure, sslContextFactory, protocol);
+		private JoatseProxy(Origin.Address address, boolean secure) {
+			super(address, secure, null, null);
 		}
 
 		@Override
@@ -1188,25 +1212,25 @@ public class HttpProxyManager implements InitializingBean, DisposableBean {
 		public ClientConnectionFactory newClientConnectionFactory(ClientConnectionFactory connectionFactory) {
 			return new ClientConnectionFactory() {
 				@Override
-				public Connection newConnection(EndPoint endPoint, Map<String, Object> context) throws IOException {
+				public org.eclipse.jetty.io.Connection newConnection(EndPoint endPoint, Map<String, Object> context) throws IOException {
 					@SuppressWarnings("unchecked")
 					Promise<Connection> promise = (Promise<Connection>) context
-							.get(HttpClientTransport.HTTP_CONNECTION_PROMISE_CONTEXT_KEY);
-					HttpDestination destination = (HttpDestination) context
-							.get(HttpClientTransport.HTTP_DESTINATION_CONTEXT_KEY);
+							.get(org.eclipse.jetty.client.Connection.PROMISE_CONTEXT_KEY);
+					Destination destination = (Destination) context
+							.get(org.eclipse.jetty.client.Destination.CONTEXT_KEY);
 					log.debug("newConnection. EndPoint={}; Context=\r\n{}; Destination=\r\n{}", endPoint,
 							mapToString(context), destination);
 					Executor executor = destination.getHttpClient().getExecutor();
 					SwitchboardConnection connection = new SwitchboardConnection(endPoint, executor, destination,
 							promise, connectionFactory, context);
-					return customize(connection, context);
+					return connection;
 				}
 			};
 		}
 	}
 
 	static Logger log = LoggerFactory.getLogger(HttpProxyManager.class);
-	static Logger logJetty = LoggerFactory.getLogger(org.eclipse.jetty.proxy.AsyncProxyServlet.class);
+	static Logger logJetty = LoggerFactory.getLogger(AsyncMiddleManServlet.class);
 
 	@Autowired
 	@Qualifier("httpPortRange")
@@ -1289,7 +1313,7 @@ public class HttpProxyManager implements InitializingBean, DisposableBean {
         scheduler.scheduleWithFixedDelay(()->{
         	if (log.isDebugEnabled()) {
 	        	StringBuilder sb = new StringBuilder();
-	        	String lf = String.format("%n\t");
+	        	String lf = "%n\t".formatted();
 	        	for (WeakReference<WebSocketClient> c: wsClients) {
 					sb.append(Optional.ofNullable(c.get()).map(x -> x.getState()).orElse("-")).append(lf);
 	        	}
@@ -1349,7 +1373,7 @@ public class HttpProxyManager implements InitializingBean, DisposableBean {
 		return sslConnector;
 	}
 
-	private static ServletHolder proxyHolder(AbstractProxyServlet proxyServlet) {
+	private static ServletHolder proxyHolder(AsyncMiddleManServlet proxyServlet) {
 		final ServletHolder proxyHolder = new ServletHolder(proxyServlet);
 		proxyHolder.setInitOrder(1);
 		return proxyHolder;
@@ -1369,7 +1393,7 @@ public class HttpProxyManager implements InitializingBean, DisposableBean {
 //		}
 //	}
 	
-	private static ServletContextHandler servletContextHandler(AbstractProxyServlet servlet) {
+	private static ServletContextHandler servletContextHandler(AsyncMiddleManServlet servlet) {
 		final ServletContextHandler servletContextHandler = new ServletContextHandler();
 		servletContextHandler.setContextPath("/");
 //	    Servlet websocketServlet = new JettyWebSocketServlet() {
@@ -1390,7 +1414,7 @@ public class HttpProxyManager implements InitializingBean, DisposableBean {
 	}
 
 	private static String mapToString(Map<String, Object> context) {
-		return context.entrySet().stream().map(e -> String.format("  %s:\t%s", e.getKey(), e.getValue()))
+		return context.entrySet().stream().map(e -> "  %s:\t%s".formatted(e.getKey(), e.getValue()))
 				.collect(Collectors.joining(",\r\n"));
 	}
 

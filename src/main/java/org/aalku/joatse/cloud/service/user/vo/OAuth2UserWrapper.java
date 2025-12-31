@@ -1,5 +1,6 @@
 package org.aalku.joatse.cloud.service.user.vo;
 
+import java.io.Serial;
 import java.io.Serializable;
 import java.util.Collection;
 import java.util.Map;
@@ -13,6 +14,7 @@ import org.springframework.security.oauth2.core.user.OAuth2User;
 
 public final class OAuth2UserWrapper implements OAuth2User, Supplier<JoatseUser>, Serializable {
 
+	@Serial
 	private static final long serialVersionUID = 1L;
 	
 	private final JoatseUser user;

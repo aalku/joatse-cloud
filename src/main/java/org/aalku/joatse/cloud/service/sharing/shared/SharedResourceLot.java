@@ -20,13 +20,17 @@ import java.util.stream.Collectors;
 
 import org.aalku.joatse.cloud.service.sharing.command.CommandTunnel;
 import org.aalku.joatse.cloud.service.sharing.command.TerminalSessionHandler;
+import org.aalku.joatse.cloud.service.sharing.file.FileSessionHandler;
 import org.aalku.joatse.cloud.service.sharing.file.FileTunnel;
+import org.aalku.joatse.cloud.service.sharing.folder.FolderSessionHandler;
+import org.aalku.joatse.cloud.service.sharing.folder.FolderTunnel;
 import org.aalku.joatse.cloud.service.sharing.http.HttpEndpointGenerator;
 import org.aalku.joatse.cloud.service.sharing.http.HttpTunnel;
 import org.aalku.joatse.cloud.service.sharing.http.ListenAddress;
 import org.aalku.joatse.cloud.service.sharing.request.LotSharingRequest;
 import org.aalku.joatse.cloud.service.sharing.request.TunnelRequestCommandItem;
 import org.aalku.joatse.cloud.service.sharing.request.TunnelRequestFileItem;
+import org.aalku.joatse.cloud.service.sharing.request.TunnelRequestFolderItem;
 import org.aalku.joatse.cloud.service.sharing.request.TunnelRequestHttpItem;
 import org.aalku.joatse.cloud.service.sharing.request.TunnelRequestTcpItem;
 import org.aalku.joatse.cloud.service.user.vo.JoatseUser;
@@ -53,10 +57,13 @@ public class SharedResourceLot {
 	 */
 	private volatile BiConsumer<Long, AsynchronousSocketChannel> tcpConnectionListener;
 	private volatile TerminalSessionHandler terminalSessionHandler;
+	private volatile FileSessionHandler fileSessionHandler;
+	private volatile FolderSessionHandler folderSessionHandler;
 	private Collection<TcpTunnel> tcpItems = new ArrayList<>(1);
 	private Collection<HttpTunnel> httpItems = new ArrayList<>(1);
 	private Collection<CommandTunnel> commandItems = new ArrayList<>(1);
 	private Collection<FileTunnel> fileItems = new ArrayList<>(1);
+	private Collection<FolderTunnel> folderItems = new ArrayList<>(1);
 	private boolean authorizeByHttpUrl;
 	private Supplier<CompletableFuture<byte[]>> targetPublicKeyProvider;
 
@@ -92,6 +99,12 @@ public class SharedResourceLot {
 				.map(x -> (TunnelRequestFileItem) x).collect(Collectors.toList());
 		for (TunnelRequestFileItem r: fItems) {
 			this.addFileItem(r);
+		}
+
+		List<TunnelRequestFolderItem> folderItems = request.getItems().stream().filter(x -> x instanceof TunnelRequestFolderItem)
+				.map(x -> (TunnelRequestFolderItem) x).collect(Collectors.toList());
+		for (TunnelRequestFolderItem r: folderItems) {
+			this.addFolderItem(r);
 		}
 
 		this.authorizeByHttpUrl = request.isAutoAuthorizeByHttpUrl();
@@ -178,7 +191,11 @@ public class SharedResourceLot {
 	}
 	
 	private void addFileItem(TunnelRequestFileItem r) {
-		fileItems.add(new FileTunnel(this, r.targetId, r.targetDescription, r.getTargetPath()));
+		fileItems.add(new FileTunnel(this, r.targetId, r.targetDescription, r.getTargetPath(), r.getTargetFileName()));
+	}
+
+	private void addFolderItem(TunnelRequestFolderItem r) {
+		folderItems.add(new FolderTunnel(this, r.targetId, r.targetDescription, r.getTargetPath(), r.isReadOnly()));
 	}
 
 	public TcpTunnel getTcpItem(long targetId) {
@@ -195,6 +212,10 @@ public class SharedResourceLot {
 	
 	public FileTunnel getFileItem(long targetId) {
 		return getFileItems().stream().filter(i->i.getTargetId()==targetId).findAny().orElse(null);
+	}
+	
+	public FolderTunnel getFolderItem(long targetId) {
+		return getFolderItems().stream().filter(i->i.getTargetId()==targetId).findAny().orElse(null);
 	}
 	
 	public Collection<TcpTunnel> getTcpItems() {
@@ -215,6 +236,10 @@ public class SharedResourceLot {
 	
 	public Collection<FileTunnel> getFileItems() {
 		return fileItems;
+	}
+	
+	public Collection<FolderTunnel> getFolderItems() {
+		return folderItems;
 	}
 	
 	/**
@@ -258,6 +283,19 @@ public class SharedResourceLot {
 		fileItems.forEach(i->{
 			ListenAddress listenAddress = httpEndpointGenerator.generateListenAddressForFile(i, forbiddenAddresses);
 			log.debug("Generated ListenAddress for FileTunnel '{}': {}", 
+				i.getTargetDescription(), listenAddress);
+			i.setListenAddress(listenAddress);
+			forbiddenAddresses.add(listenAddress);
+		});
+	}
+
+	public void selectFolderEndpoints(HttpEndpointGenerator httpEndpointGenerator) {
+		LinkedHashSet<ListenAddress> forbiddenAddresses = new LinkedHashSet<ListenAddress>();
+		folderItems.forEach(i->{
+			// TODO: Implement proper folder endpoint generation when folder sharing operations are implemented
+			// For now, generate a dummy listen address similar to file endpoints
+			ListenAddress listenAddress = httpEndpointGenerator.generateListenAddressForFolder(i, forbiddenAddresses);
+			log.debug("Generated ListenAddress for FolderTunnel '{}': {}", 
 				i.getTargetDescription(), listenAddress);
 			i.setListenAddress(listenAddress);
 			forbiddenAddresses.add(listenAddress);
@@ -323,6 +361,32 @@ public class SharedResourceLot {
 			res.put("commandTunnels", a);
 		}
 
+		Collection<FileTunnel> fileItemsColl = Optional.ofNullable(this.fileItems).orElse(Collections.emptyList());
+		if (fileItemsColl.size() > 0) {
+			JSONArray a = new JSONArray();
+			for (FileTunnel i: fileItemsColl) {
+				JSONObject o = new JSONObject();
+				o.put("targetDescription", i.getTargetDescription());
+				o.put("targetPath", i.getTargetPath());
+				o.put("targetFileName", i.getTargetFileName());
+				a.put(o);
+			}
+			res.put("fileTunnels", a);
+		}
+
+		Collection<FolderTunnel> folderItemsColl = Optional.ofNullable(this.folderItems).orElse(Collections.emptyList());
+		if (folderItemsColl.size() > 0) {
+			JSONArray a = new JSONArray();
+			for (FolderTunnel i: folderItemsColl) {
+				JSONObject o = new JSONObject();
+				o.put("targetDescription", i.getTargetDescription());
+				o.put("targetPath", i.getTargetPath());
+				o.put("readOnly", i.isReadOnly());
+				a.put(o);
+			}
+			res.put("folderTunnels", a);
+		}
+
 		return res;
 	}
 
@@ -336,6 +400,22 @@ public class SharedResourceLot {
 
 	public void setTerminalSessionHandler(TerminalSessionHandler terminalSessionHandler) {
 		this.terminalSessionHandler = terminalSessionHandler;
+	}
+
+	public FileSessionHandler getFileSessionHandler() {
+		return fileSessionHandler;
+	}
+
+	public void setFileSessionHandler(FileSessionHandler fileSessionHandler) {
+		this.fileSessionHandler = fileSessionHandler;
+	}
+
+	public FolderSessionHandler getFolderSessionHandler() {
+		return folderSessionHandler;
+	}
+
+	public void setFolderSessionHandler(FolderSessionHandler folderSessionHandler) {
+		this.folderSessionHandler = folderSessionHandler;
 	}
 
 	public CompletableFuture<byte[]> getTargetPublicKey() {

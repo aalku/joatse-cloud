@@ -1,5 +1,6 @@
 package org.aalku.joatse.cloud.service.user.vo;
 
+import java.io.Serial;
 import java.io.Serializable;
 import java.time.Instant;
 import java.util.UUID;
@@ -18,7 +19,8 @@ import jakarta.persistence.UniqueConstraint;
 @Entity(name = "emailVerificationToken")
 @Table(uniqueConstraints = @UniqueConstraint(columnNames = { "user" }))
 public class EmailVerificationToken implements Serializable {
-	
+
+	@Serial
 	private static final long serialVersionUID = 1L;
 
 	/**

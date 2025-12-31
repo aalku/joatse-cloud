@@ -92,6 +92,45 @@ public class TunnelRegistry {
 		return tunnelsMatching;
 	}
 	
+	public synchronized List<org.aalku.joatse.cloud.service.sharing.folder.FolderTunnel> findMatchingFolderTunnel(
+			InetAddress remoteAddress, int serverPort, String serverName, String protocol, String requestPath) {
+		ListenAddress reachedAddress = new ListenAddress(serverPort, serverName, protocol);
+		
+		List<org.aalku.joatse.cloud.service.sharing.folder.FolderTunnel> tunnelsMatching = tunnelsByUUID.values().stream()
+				.flatMap(x -> x.getFolderItems().stream())
+				.filter(folder->{
+					ListenAddress folderAddress = folder.getListenAddress();
+					if (folderAddress == null) {
+						log.warn("FolderTunnel has null ListenAddress - targetId={}, targetDescription={}, targetPath={}", 
+							folder.getTargetId(), folder.getTargetDescription(), folder.getTargetPath());
+						return false;
+					}
+					// Check if ListenAddress matches
+					if (!folderAddress.equals(reachedAddress)) {
+						return false;
+					}
+					// Check if request path starts with the folder's URL path
+					if (requestPath != null && folder.getListenUrl() != null) {
+						String folderPath = folder.getListenUrl().getPath();
+						// Folder should match if request path starts with folder path
+						return requestPath.equals(folderPath) || requestPath.startsWith(folderPath);
+					}
+					return true;
+				})
+				.filter(folder -> {
+					SharedResourceLot t = folder.getSharedResourceLot();
+					if (t.isAutoAuthorizeByHttpUrl()) {
+						return true;
+					} else {
+						// Use flexible IP address matching (supports exact IP, CIDR, and wildcards)
+						return isAddressAllowed(remoteAddress, t);
+					}
+				})
+				.collect(Collectors.toList());
+		log.debug("Found {} folder tunnel(s) matching: {}", tunnelsMatching.size(), reachedAddress);
+		return tunnelsMatching;
+	}
+	
 	@SuppressWarnings("unchecked")
 	public synchronized <E> E getTunnel(UUID uuid, long targetId) {
 		SharedResourceLot srl = tunnelsByUUID.get(uuid);

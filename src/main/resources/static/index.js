@@ -26,6 +26,12 @@ const App = {
 			await this.loadData();
 			return false;
 		},
+		async openFolderTunnel(s, f) {
+			await this.allowMyIP(s, false);
+			window.open(f.listenUrl, "_blank");
+			await this.loadData();
+			return false;
+		},
 		async openCommandTunnel(s, item){
 			console.log("openCommandTunnel", s.uuid, item.targetId);
 			await this.allowMyIP(s, false);
@@ -53,6 +59,10 @@ const App = {
 							s.fileItems = (s.fileItems||[]).map(file=>{
 								file.description = `${file.listenUrl} --> tunnel --> ${file.targetPath || file.targetDescription || ''}`.trim();
 								return file;
+							});
+							s.folderItems = (s.folderItems||[]).map(folder=>{
+								folder.description = `${folder.listenUrl} --> tunnel --> ${folder.targetPath || folder.targetDescription || ''}`.trim();
+								return folder;
 							});
 							s.commandItems = (s.commandItems||[]).map(cmd=>{
 								cmd.description = `${[...cmd.command].join(" ")}`;

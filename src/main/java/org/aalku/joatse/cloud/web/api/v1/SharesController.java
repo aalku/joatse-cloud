@@ -5,11 +5,9 @@ import java.net.URL;
 import java.net.UnknownHostException;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -18,10 +16,12 @@ import org.aalku.joatse.cloud.service.sharing.SharingManager;
 import org.aalku.joatse.cloud.service.sharing.SharingManager.TunnelCreationResult;
 import org.aalku.joatse.cloud.service.sharing.command.CommandTunnel;
 import org.aalku.joatse.cloud.service.sharing.file.FileTunnel;
+import org.aalku.joatse.cloud.service.sharing.folder.FolderTunnel;
 import org.aalku.joatse.cloud.service.sharing.http.HttpTunnel;
 import org.aalku.joatse.cloud.service.sharing.request.LotSharingRequest;
 import org.aalku.joatse.cloud.service.sharing.request.TunnelRequestCommandItem;
 import org.aalku.joatse.cloud.service.sharing.request.TunnelRequestFileItem;
+import org.aalku.joatse.cloud.service.sharing.request.TunnelRequestFolderItem;
 import org.aalku.joatse.cloud.service.sharing.request.TunnelRequestHttpItem;
 import org.aalku.joatse.cloud.service.sharing.request.TunnelRequestItem;
 import org.aalku.joatse.cloud.service.sharing.request.TunnelRequestTcpItem;
@@ -85,29 +85,30 @@ public class SharesController {
 			for (TunnelRequestItem item : request.getItems()) {
 				Map<String, Object> itemMap = new LinkedHashMap<>();
 				
-				if (item instanceof TunnelRequestHttpItem) {
-					TunnelRequestHttpItem httpItem = (TunnelRequestHttpItem) item;
+				if (item instanceof TunnelRequestHttpItem httpItem) {
 					itemMap.put("type", "http");
 					itemMap.put("targetDescription", httpItem.targetDescription);
 					itemMap.put("targetUrl", httpItem.getTargetUrl().toString());
 					itemMap.put("targetHostname", httpItem.getTargetUrl().getHost());
 					itemMap.put("targetPort", httpItem.getTargetUrl().getPort());
-				} else if (item instanceof TunnelRequestFileItem) {
-					TunnelRequestFileItem fileItem = (TunnelRequestFileItem) item;
+				} else if (item instanceof TunnelRequestFileItem fileItem) {
 					itemMap.put("type", "file");
 					itemMap.put("targetDescription", fileItem.targetDescription);
 					itemMap.put("targetPath", fileItem.getTargetPath());
-				} else if (item instanceof TunnelRequestTcpItem) {
-					TunnelRequestTcpItem tcpItem = (TunnelRequestTcpItem) item;
+				} else if (item instanceof TunnelRequestTcpItem tcpItem) {
 					itemMap.put("type", "tcp");
 					itemMap.put("targetDescription", tcpItem.targetDescription);
 					itemMap.put("targetHostname", tcpItem.targetHostname);
 					itemMap.put("targetPort", tcpItem.targetPort);
-				} else if (item instanceof TunnelRequestCommandItem) {
-					TunnelRequestCommandItem cmdItem = (TunnelRequestCommandItem) item;
+				} else if (item instanceof TunnelRequestCommandItem cmdItem) {
 					itemMap.put("type", "command");
 					itemMap.put("targetDescription", cmdItem.targetDescription);
 					itemMap.put("command", cmdItem.getCommand());
+				} else if (item instanceof TunnelRequestFolderItem folderItem) {
+					itemMap.put("type", "folder");
+					itemMap.put("targetDescription", folderItem.targetDescription);
+					itemMap.put("targetPath", folderItem.getTargetPath());
+					itemMap.put("readOnly", folderItem.isReadOnly());
 				}
 				
 				items.add(itemMap);
@@ -182,8 +183,7 @@ public class SharesController {
 			// Wait for the tunnel to be created (with timeout)
 			TunnelCreationResult result = request.getFuture().get(30, TimeUnit.SECONDS);
 			
-			if (result instanceof TunnelCreationResult.Accepted) {
-				TunnelCreationResult.Accepted accepted = (TunnelCreationResult.Accepted) result;
+			if (result instanceof TunnelCreationResult.Accepted accepted) {
 				SharedResourceLot tunnel = accepted.getTunnel();
 				
 				response.put("success", true);
@@ -243,6 +243,28 @@ public class SharesController {
 					tunnelMap.put("type", "command");
 					tunnelMap.put("targetId", String.valueOf(cmdTunnel.getTargetId()));
 					tunnelMap.put("targetDescription", cmdTunnel.getTargetDescription());
+					tunnels.add(tunnelMap);
+				}
+				
+				// Folder tunnels
+				for (FolderTunnel folderTunnel : tunnel.getFolderItems()) {
+					Map<String, Object> tunnelMap = new LinkedHashMap<>();
+					tunnelMap.put("type", "folder");
+					tunnelMap.put("targetId", String.valueOf(folderTunnel.getTargetId()));
+					
+					URL listenUrl = folderTunnel.getListenUrl();
+					if (listenUrl == null) {
+						log.error("Folder tunnel listenUrl is null for targetId={}, targetDescription={}, targetPath={}.",
+							folderTunnel.getTargetId(), folderTunnel.getTargetDescription(),
+							folderTunnel.getTargetPath());
+						tunnelMap.put("listenUrl", null);
+					} else {
+						tunnelMap.put("listenUrl", listenUrl.toString());
+					}
+					
+					tunnelMap.put("targetDescription", folderTunnel.getTargetDescription());
+					tunnelMap.put("targetPath", folderTunnel.getTargetPath());
+					tunnelMap.put("readOnly", folderTunnel.isReadOnly());
 					tunnels.add(tunnelMap);
 				}
 				

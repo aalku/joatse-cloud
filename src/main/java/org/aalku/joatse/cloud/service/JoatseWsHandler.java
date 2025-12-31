@@ -19,6 +19,7 @@ import org.aalku.joatse.cloud.service.sharing.SharingManager.TunnelCreationResul
 import org.aalku.joatse.cloud.service.sharing.command.CommandTunnel;
 import org.aalku.joatse.cloud.service.sharing.command.TerminalSessionHandler;
 import org.aalku.joatse.cloud.service.sharing.file.FileTunnel;
+import org.aalku.joatse.cloud.service.sharing.folder.FolderTunnel;
 import org.aalku.joatse.cloud.service.sharing.http.HttpTunnel;
 import org.aalku.joatse.cloud.service.sharing.request.LotSharingRequest;
 import org.aalku.joatse.cloud.service.sharing.shared.SharedResourceLot;
@@ -220,6 +221,14 @@ public class JoatseWsHandler extends AbstractWebSocketHandler implements WebSock
 			 * This is for incoming terminal/command connections
 			 */
 			srl.setTerminalSessionHandler(new TerminalSessionHandler(jWSSession, srl));
+			/*
+			 * This is for file sharing operations
+			 */
+			srl.setFileSessionHandler(new org.aalku.joatse.cloud.service.sharing.file.FileSessionHandler(jWSSession, srl));
+			/*
+			 * This is for folder sharing operations
+			 */
+			srl.setFolderSessionHandler(new org.aalku.joatse.cloud.service.sharing.folder.FolderSessionHandler(jWSSession, srl));
 			srl.setTargetPublicKeyProvider(()->jWSSession.getTargetPublicKey());
 		} catch (Exception e2) {
 			log.error("Exception processing channel acceptance: {}", e2, e2);
@@ -274,6 +283,17 @@ public class JoatseWsHandler extends AbstractWebSocketHandler implements WebSock
 			fileTunnels.add(j);
 		}
 		res.put("fileTunnels", fileTunnels);
+
+		Collection<JSONObject> folderTunnels = new ArrayList<>();
+		for (FolderTunnel i: tunnel.getFolderItems()) {
+			JSONObject j = new JSONObject();
+			j.put("listenUrl", i.getListenUrl());
+			j.put("targetPath", i.getTargetPath());
+			j.put("targetDescription", i.getTargetDescription());
+			j.put("readOnly", i.isReadOnly());
+			folderTunnels.add(j);
+		}
+		res.put("folderTunnels", folderTunnels);
 
 		return res.toString();
 	}

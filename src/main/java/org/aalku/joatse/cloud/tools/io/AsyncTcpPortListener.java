@@ -57,7 +57,7 @@ public class AsyncTcpPortListener<E> {
 				ass.bind(tempAddress);
 				this.address=(InetSocketAddress) ass.getLocalAddress();
 			} catch (IOException e) {
-				throw new IOException(String.format("Could not listen on port %s:%s: %s", address, port, e), e); // Expected
+				throw new IOException("Could not listen on port %s:%s: %s".formatted(address, port, e), e); // Expected
 			}
 		} catch (Exception e) {
 			// Callback is called in another thread so it doesn't have the inherited context

@@ -100,7 +100,7 @@ public class AdminUserController {
 
 	@DeleteMapping("/admin/users/{uuid}")
 	@ResponseBody
-	public Map<String, Object> deleteUser(@PathVariable(value="uuid") UUID uuid) {
+	public Map<String, Object> deleteUser(@PathVariable UUID uuid) {
 		JoatseUser user = userManager.loadUserByUUID(uuid);
 		if (user == null) {
 			throw new IllegalArgumentException("User not found");
@@ -111,7 +111,7 @@ public class AdminUserController {
 	
 	@PostMapping("/admin/users/{uuid}/resetPassword")
 	@ResponseBody
-	public Map<String, Object> resetPassword(jakarta.servlet.http.HttpServletRequest request, @PathVariable(value="uuid") UUID uuid) throws InterruptedException, ExecutionException {
+	public Map<String, Object> resetPassword(jakarta.servlet.http.HttpServletRequest request, @PathVariable UUID uuid) throws InterruptedException, ExecutionException {
 		JoatseUser user = userManager.loadUserByUUID(uuid);
 		if (user == null) {
 			throw new IllegalArgumentException("User not found");

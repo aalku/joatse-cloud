@@ -17,7 +17,6 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.web.authentication.www.BasicAuthenticationFilter;
 import org.springframework.stereotype.Component;
 
-import io.jsonwebtoken.JwtException;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.Cookie;
@@ -77,7 +76,7 @@ public class JWTAuthorizationFilter extends BasicAuthenticationFilter {
 					SecurityContextHolder.getContext().setAuthentication(authentication);
 					log.debug("Authenticated user {} via JWT", user.getUsername());
 				}
-			} catch (JwtException e) {
+			} catch (Exception e) {
 				log.warn("Exception processing jwt: " + e, e);
 			}
 		}

@@ -21,6 +21,13 @@ import org.eclipse.jetty.util.Promise;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+/**
+ * SwitchboardConnection for Jetty 12.
+ * 
+ * Key changes from Jetty 11:
+ * - HttpDestination replaced with Destination interface
+ * - Origin access is different
+ */
 public class SwitchboardConnection extends AbstractConnection {
 	/* 
 	 * 
@@ -29,7 +36,7 @@ public class SwitchboardConnection extends AbstractConnection {
 	 */
 	static Logger log = LoggerFactory.getLogger(SwitchboardConnection.class);
 
-	private final HttpDestination destination;
+	private final Destination destination;
 	private final EndPoint endPoint;
 	private final ByteBuffer response = ByteBuffer.allocate(1024 * 10);
 	private Promise<Connection> promise;
@@ -37,7 +44,7 @@ public class SwitchboardConnection extends AbstractConnection {
 	private Map<String, Object> context;
 	private Executor executor;
 
-	public SwitchboardConnection(EndPoint endPoint, Executor executor, HttpDestination destination,
+	public SwitchboardConnection(EndPoint endPoint, Executor executor, Destination destination,
 			Promise<Connection> promise, ClientConnectionFactory connectionFactory, Map<String, Object> context) {
 		super(endPoint, executor);
 		this.executor = executor;
@@ -55,14 +62,22 @@ public class SwitchboardConnection extends AbstractConnection {
 	}
 
 	@Override
-	public void onOpen() {							
+	public void onOpen() {
+		// In Jetty 12, get the HttpTunnel from the destination's Origin tag
+		// The tag was set on the request via proxyRequest.tag(tunnel) in HttpProxyManager
+		// and flows to the Origin during destination resolution
 		HttpTunnel tunnel = (HttpTunnel) destination.getOrigin().getTag();
+		
 		if (tunnel == null) {
-			log.error("HttpTunnel is not tagged");
+			log.error("HttpTunnel not found in destination origin tag");
+			failed(new IOException("HttpTunnel not found"));
+			return;
 		}
+		
 		UUID uuid = tunnel.getTunnel().getUuid();
 		log.info("onOpen. HttpTunnel= {} --> {}", uuid, tunnel.getTargetURL().toString());
 		super.onOpen();
+		
 		// Talk to Switchboard
 		ByteBuffer hello = ByteBuffer.allocate(16+8);
 		hello.putLong(uuid.getMostSignificantBits());
@@ -114,7 +129,7 @@ public class SwitchboardConnection extends AbstractConnection {
 			} else {
 				byte theByte = b.get();
 				if (debug) {
-					System.err.println("Received byte " + String.format("0x%02x", theByte & 0xFF));
+					System.err.println("Received byte " + "0x%02x".formatted(theByte & 0xFF));
 				}
 				response.put(theByte);
 				if (response.position() == 1 && theByte == 0) {
@@ -135,23 +150,22 @@ public class SwitchboardConnection extends AbstractConnection {
 	}
 
 	private void tunnel() {
-        try
-        {
+        try {
+            Origin origin = destination.getOrigin();
+            Origin.Address address = origin.getAddress();
             // Don't want to do DNS resolution here.
-            InetSocketAddress address = InetSocketAddress.createUnresolved(destination.getHost(), destination.getPort());
-            context.put(ClientConnector.REMOTE_SOCKET_ADDRESS_CONTEXT_KEY, address);
+            InetSocketAddress socketAddress = InetSocketAddress.createUnresolved(address.getHost(), address.getPort());
+            context.put(ClientConnector.REMOTE_SOCKET_ADDRESS_CONTEXT_KEY, socketAddress);
             ClientConnectionFactory connectionFactory = this.connectionFactory;
-            if (destination.isSecure()) {
+            if (origin.getScheme().equalsIgnoreCase("https")) {
                 HttpClient httpClient = destination.getHttpClient();
-				// connectionFactory = httpClient.newSslClientConnectionFactory(null, connectionFactory);
-            	connectionFactory = new SslClientConnectionFactory(httpClient.getSslContextFactory(), httpClient.getByteBufferPool(), executor, connectionFactory);
+            	connectionFactory = new SslClientConnectionFactory(httpClient.getSslContextFactory(), 
+            			httpClient.getByteBufferPool(), executor, connectionFactory);
             }
             org.eclipse.jetty.io.Connection newConnection = connectionFactory.newConnection(getEndPoint(), context);
             getEndPoint().upgrade(newConnection);
             log.info("Joatse HTTP tunnel established: {} over {}", this, newConnection);
-        }
-        catch (Throwable x)
-        {
+        } catch (Throwable x) {
 			failed(x);
 		}
 	}

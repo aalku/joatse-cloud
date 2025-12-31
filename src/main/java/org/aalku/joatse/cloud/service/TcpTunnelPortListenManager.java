@@ -60,7 +60,7 @@ public class TcpTunnelPortListenManager implements InitializingBean, DisposableB
 					@Override
 					public void accept(Event<Void> t) {
 						if (t.error != null) {
-							log.error(String.format("Could not accept connections on tcp port %s: %s", port, t.error.toString()), t.error);
+							log.error("Could not accept connections on tcp port %s: %s".formatted(port, t.error.toString()), t.error);
 							synchronized (openPortMap) {
 								openPortMap.remove(port);
 								/*

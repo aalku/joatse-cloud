@@ -33,7 +33,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 
 /**
  * MongoDB-style database initialization service.
@@ -66,15 +66,15 @@ public class DatabaseInitializer {
     
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    /**
-     * Initializes the database if it appears to be empty.
-     * This method is called during Spring context initialization.
-     * The @Bean annotation ensures this is called during startup.
-     * The @Transactional annotation ensures atomicity - all operations succeed or all fail.
-     */
-    @Bean
-    @Transactional
-    public String initializeDatabase() {
+	/**
+	 * Initializes the database if it appears to be empty.
+	 * This method is called during Spring context initialization.
+	 * The @Bean annotation ensures this is called during startup.
+	 * The @Transactional annotation ensures atomicity - all operations succeed or all fail.
+	 */
+	@Bean
+	@Transactional
+	String initializeDatabase() {
         log.info("Starting database initialization check...");
         log.info("Initialization file configured as: '{}'", initializationFile);
         

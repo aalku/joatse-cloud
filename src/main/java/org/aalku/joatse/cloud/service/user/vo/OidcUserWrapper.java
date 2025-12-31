@@ -1,5 +1,6 @@
 package org.aalku.joatse.cloud.service.user.vo;
 
+import java.io.Serial;
 import java.io.Serializable;
 import java.net.URL;
 import java.time.Instant;
@@ -19,6 +20,7 @@ import org.springframework.security.oauth2.core.oidc.user.OidcUser;
 
 public final class OidcUserWrapper implements OidcUser, Supplier<JoatseUser>, Serializable {
 
+	@Serial
 	private static final long serialVersionUID = 1L;
 	
 	private final OidcUser oidcUser;

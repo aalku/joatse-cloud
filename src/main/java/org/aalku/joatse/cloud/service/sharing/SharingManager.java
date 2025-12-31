@@ -263,7 +263,7 @@ public class SharingManager implements InitializingBean, DisposableBean {
 			}
 		}
 		for (final TunnelRequestItem ir : Optional.ofNullable(request.getItems()).orElse(Collections.emptyList())) {
-			if (!items.stream().filter(is->is.equals(ir)).findAny().isPresent()) {
+			if (items.stream().filter(is -> is.equals(ir)).findAny().isEmpty()) {
 				log.warn("Can't find match for " + ir + ", saved items were " + items);
 				return "New request item: " + ir;
 			}
@@ -326,9 +326,10 @@ public class SharingManager implements InitializingBean, DisposableBean {
 		tunnel.selectTcpPorts(tcpOpenPorts);
 		tunnel.selectHttpEndpoints(httpEndpointGenerator);
 		tunnel.selectFileEndpoints(httpEndpointGenerator);
+		tunnel.selectFolderEndpoints(httpEndpointGenerator);
 		tunnelRegistry.registerTunnel(tunnel);
-		log.info("Tunnel registered for request {} with {} HTTP, {} file, {} TCP items", 
-			request.getUuid(), tunnel.getHttpItems().size(), tunnel.getFileItems().size(), tunnel.getTcpItems().size());
+		log.info("Tunnel registered for request {} with {} HTTP, {} file, {} folder, {} TCP items", 
+			request.getUuid(), tunnel.getHttpItems().size(), tunnel.getFileItems().size(), tunnel.getFolderItems().size(), tunnel.getTcpItems().size());
 		return tunnel;
 	}
 
@@ -393,7 +394,7 @@ public class SharingManager implements InitializingBean, DisposableBean {
 		List<TcpTunnel> matching = tunnelRegistry
 				.findMatchingTcpTunnel(remoteAddress.getAddress(), port);
 		if (matching.size() == 1) {
-			TcpTunnel tcpTunnel = matching.get(0);
+			TcpTunnel tcpTunnel = matching.getFirst();
 			SharedResourceLot tunnel = tcpTunnel.getTunnel();
 			log.info("Accepted connection from {}.{} on port {}", remoteAddress,
 					tcpTunnel.targetId, port);
@@ -424,12 +425,10 @@ public class SharingManager implements InitializingBean, DisposableBean {
 	public void switchboardConnectionReady(Object context, AsynchronousSocketChannel channel) {
 		SharedResourceLot tunnel = null;
 		long targetId = -1;
-		if (context instanceof HttpTunnel) {
-			HttpTunnel httpTarget = (HttpTunnel) context;
+		if (context instanceof HttpTunnel httpTarget) {
 			tunnel = httpTarget.getTunnel();
 			targetId = httpTarget.getTargetId();
-		} else if (context instanceof TcpTunnel) {
-			TcpTunnel tcpTarget = (TcpTunnel) context;
+		} else if (context instanceof TcpTunnel tcpTarget) {
 			tunnel = tcpTarget.getTunnel();
 			targetId = tcpTarget.getTargetId();
 		} else {
@@ -449,7 +448,7 @@ public class SharingManager implements InitializingBean, DisposableBean {
 	public HttpTunnel getTunnelForHttpRequest(InetAddress remoteAddress, int serverPort, String serverName, String protocol) {
 		List<HttpTunnel> res = tunnelRegistry.findMatchingHttpTunnel(remoteAddress, serverPort, serverName, protocol);
 		if (res.size() > 0) {
-			HttpTunnel ht = res.get(0);
+			HttpTunnel ht = res.getFirst();
 			SharedResourceLot srl = ht.getTunnel();
 			/* If not authorized maybe it should be */
 			boolean isAlreadyAllowed = srl.getAllowedAddressRanges().stream()
@@ -477,7 +476,27 @@ public class SharingManager implements InitializingBean, DisposableBean {
 		List<FileTunnel> res = tunnelRegistry.findMatchingFileTunnel(remoteAddress, serverPort, serverName, protocol, requestPath);
 		log.debug("File tunnel lookup for {}:{} - {} - {}  returned {} result(s)", serverName, serverPort, protocol, requestPath, res.size());
 		if (res.size() > 0) {
-			FileTunnel ft = res.get(0);
+			FileTunnel ft = res.getFirst();
+			SharedResourceLot srl = ft.getSharedResourceLot();
+			/* If not authorized maybe it should be */
+			boolean isAlreadyAllowed = srl.getAllowedAddressRanges().stream()
+				.anyMatch(range -> range.matches(remoteAddress));
+			if (!isAlreadyAllowed && srl.isAutoAuthorizeByHttpUrl()) {
+				srl.addAllowedAddressRange(AddressRange.of(remoteAddress.getHostAddress()));
+			}
+			return ft;
+		} else {
+			return null;
+		}
+	}
+
+	public org.aalku.joatse.cloud.service.sharing.folder.FolderTunnel getTunnelForFolderRequest(
+			InetAddress remoteAddress, int serverPort, String serverName, String protocol, String requestPath) {
+		List<org.aalku.joatse.cloud.service.sharing.folder.FolderTunnel> res = 
+				tunnelRegistry.findMatchingFolderTunnel(remoteAddress, serverPort, serverName, protocol, requestPath);
+		log.debug("Folder tunnel lookup for {}:{} - {} - {}  returned {} result(s)", serverName, serverPort, protocol, requestPath, res.size());
+		if (res.size() > 0) {
+			org.aalku.joatse.cloud.service.sharing.folder.FolderTunnel ft = res.getFirst();
 			SharedResourceLot srl = ft.getSharedResourceLot();
 			/* If not authorized maybe it should be */
 			boolean isAlreadyAllowed = srl.getAllowedAddressRanges().stream()

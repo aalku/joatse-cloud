@@ -5,7 +5,6 @@ import java.nio.ByteBuffer;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -67,8 +66,6 @@ public class FileReadConnection extends AbstractToSocketConnection {
 	// Async callback support
 	private final CompletableFuture<JSONObject> metadataFuture = new CompletableFuture<>();
 	private volatile java.util.function.Consumer<ByteBuffer> dataConsumer;
-	private volatile Runnable eofCallback;
-	private volatile java.util.function.Consumer<Throwable> errorCallback;
 	private final AtomicBoolean processingQueue = new AtomicBoolean(false);
 	
 	// Byte stream protocol state
@@ -117,29 +114,18 @@ public class FileReadConnection extends AbstractToSocketConnection {
 	/**
 	 * Set callback to receive data chunks asynchronously as they arrive.
 	 * Messages are processed in order without blocking.
+	 * This is internal to file streaming - use getCompletionFuture() to be notified of completion or errors.
 	 */
-	public void setDataConsumer(java.util.function.Consumer<ByteBuffer> consumer) {
+	void setDataConsumer(java.util.function.Consumer<ByteBuffer> consumer) {
 		this.dataConsumer = consumer;
 		processQueueAsync();
 	}
 	
 	/**
-	 * Set callback to be notified when EOF is reached.
-	 */
-	public void setEofCallback(Runnable callback) {
-		this.eofCallback = callback;
-	}
-	
-	/**
-	 * Set callback to be notified of errors.
-	 */
-	public void setErrorCallback(java.util.function.Consumer<Throwable> callback) {
-		this.errorCallback = callback;
-	}
-	
-	/**
 	 * Process queued messages asynchronously without blocking.
 	 * Uses CAS to ensure only one processing task runs at a time.
+	 * 
+	 * EOF/error handling happens when dequeued, ensuring all prior data is processed first.
 	 */
 	private void processQueueAsync() {
 		// Only one processor at a time
@@ -150,51 +136,45 @@ public class FileReadConnection extends AbstractToSocketConnection {
 		// Process in a background thread or task
 		java.util.concurrent.CompletableFuture.runAsync(() -> {
 			try {
-				while (!closed.get()) {
+				// Process all messages until queue is empty or we hit EOF/error
+				// Don't check closed flag - we need to process EOF message when dequeued
+				while (true) {
 					QueueMessage msg = messageQueue.poll();
 					if (msg == null) {
 						// No more messages, exit
 						break;
 					}
 					
-					if (msg instanceof DataMessage) {
-						DataMessage dataMsg = (DataMessage) msg;
+					if (msg instanceof DataMessage dataMsg) {
 						if (dataConsumer != null) {
 							try {
 								dataConsumer.accept(dataMsg.data);
 							} catch (Exception e) {
 								log.error("Error in data consumer callback", e);
+								completionFuture.completeExceptionally(e);
+								close();
+								break;
 							}
 						}
 					} else if (msg instanceof EOFMessage) {
-						log.debug("EOF received for file {} (async)", fileTunnel.getTargetPath());
-						if (eofCallback != null) {
-							try {
-								eofCallback.run();
-							} catch (Exception e) {
-								log.error("Error in EOF callback", e);
-							}
+						// EOF dequeued - all prior data has been processed
+						log.debug("EOF dequeued for file {} - completing", fileTunnel.getTargetPath());
+						if (!completionFuture.isDone()) {
+							completionFuture.complete(null);
 						}
-						close();
 						break;
-					} else if (msg instanceof ErrorMessage) {
-						ErrorMessage errMsg = (ErrorMessage) msg;
-						log.error("Error message received for file {} (async)", fileTunnel.getTargetPath(), errMsg.error);
-						if (errorCallback != null) {
-							try {
-								errorCallback.accept(errMsg.error);
-							} catch (Exception e) {
-								log.error("Error in error callback", e);
-							}
+					} else if (msg instanceof ErrorMessage errMsg) {
+						log.error("Error dequeued for file {}", fileTunnel.getTargetPath(), errMsg.error);
+						if (!completionFuture.isDone()) {
+							completionFuture.completeExceptionally(errMsg.error);
 						}
-						close();
 						break;
 					}
 				}
 			} finally {
 				processingQueue.set(false);
-				// Check if more messages arrived while we were finishing
-				if (!messageQueue.isEmpty() && !closed.get()) {
+				// Restart if more messages and not completed yet
+				if (!messageQueue.isEmpty() && !completionFuture.isDone()) {
 					processQueueAsync();
 				}
 			}
@@ -226,42 +206,44 @@ public class FileReadConnection extends AbstractToSocketConnection {
 	}
 
 	@Override
-	public void close() {
-		if (closed.compareAndSet(false, true)) {
-			log.debug("Closing FileReadConnection for file {} (socketId={})", 
-					fileTunnel.getTargetPath(), socketId);
-			completionFuture.complete(null);
-			// Clear any remaining messages to free memory
-			messageQueue.clear();
-		}
-	}
-
-	@Override
 	protected void copyFromClientToTargetForever() {
 		// Not used for file reads - file data flows only from target to cloud
 		// TODO: Log error and disconnect if something is received as that's a protocol violation.
 	}
 
 	@Override
-	protected void closeInternal(Throwable e, Boolean b) {
-		log.debug("FileReadConnection closeInternal for file {} (socketId={})", 
-				fileTunnel.getTargetPath(), socketId);
+	protected void closeInternal(Throwable e, Boolean remote) {
+		log.debug("FileReadConnection closeInternal for file {} (socketId={}, error={}, remote={})", 
+				fileTunnel.getTargetPath(), socketId, e != null ? e.getMessage() : "none", remote);
+		
+		// Enqueue EOF/error BEFORE setting closed flag to avoid race condition
+		// The queue processor will handle completion when it dequeues EOF/error
+		
 		if (e != null) {
-			// Enqueue error message
+			// Error case
 			errorOccurred.set(true);
-			completionFuture.completeExceptionally(e);
-			metadataFuture.completeExceptionally(e);
+			if (!metadataFuture.isDone()) {
+				metadataFuture.completeExceptionally(e);
+			}
 			messageQueue.offer(new ErrorMessage(e));
-			// Trigger async processing if callbacks are set
-			if (dataConsumer != null || errorCallback != null) {
+			closed.set(true);
+			// Trigger async processing if data consumer is set
+			if (dataConsumer != null) {
 				processQueueAsync();
+			} else if (!completionFuture.isDone()) {
+				// No data consumer, complete immediately
+				completionFuture.completeExceptionally(e);
 			}
 		} else {
-			// Normal close from remote side - enqueue EOF
+			// Normal close from remote side - enqueue EOF first
 			eof();
-			// Trigger async processing if callbacks are set
-			if (dataConsumer != null || eofCallback != null) {
+			closed.set(true);
+			// Trigger async processing if data consumer is set
+			if (dataConsumer != null) {
 				processQueueAsync();
+			} else if (!completionFuture.isDone()) {
+				// No data consumer, complete immediately
+				completionFuture.complete(null);
 			}
 		}
 	}
@@ -394,11 +376,16 @@ public class FileReadConnection extends AbstractToSocketConnection {
 		log.error("Error reading file {} (socketId={}): {}", 
 				fileTunnel.getTargetPath(), socketId, e.getMessage(), e);
 		errorOccurred.set(true);
-		metadataFuture.completeExceptionally(e);
+		if (!metadataFuture.isDone()) {
+			metadataFuture.completeExceptionally(e);
+		}
 		messageQueue.offer(new ErrorMessage(e));
-		// Trigger async processing if callbacks are set
-		if (dataConsumer != null || errorCallback != null) {
+		// Trigger async processing if data consumer is set
+		if (dataConsumer != null) {
 			processQueueAsync();
+		} else if (!completionFuture.isDone()) {
+			// No data consumer, complete immediately
+			completionFuture.completeExceptionally(e);
 		}
 		return null;
 	}

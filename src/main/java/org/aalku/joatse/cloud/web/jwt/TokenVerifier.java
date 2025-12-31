@@ -4,7 +4,7 @@ import java.io.IOException;
 import java.security.GeneralSecurityException;
 import java.util.Map;
 
-import javax.annotation.Nullable;
+import jakarta.annotation.Nullable;
 
 public interface TokenVerifier {
 	

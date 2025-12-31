@@ -1,6 +1,7 @@
 package org.aalku.joatse.cloud.web;
 
 import java.io.IOException;
+import java.net.URI;
 import java.net.URL;
 import java.security.GeneralSecurityException;
 import java.util.Collections;
@@ -122,7 +123,7 @@ public class JoatseLoginController implements InitializingBean {
 			try {
 				SimpleMailMessage message = new SimpleMailMessage();
 				token = userManager.newEmailVerificationToken();
-				String link = new URL(new URL(request.getRequestURL().toString()), "/postLogin/emailVerification?token=" + token).toExternalForm();
+				String link = new URL(URI.create(request.getRequestURL().toString()).toURL(), "/postLogin/emailVerification?token=" + token).toExternalForm();
 				message.setSubject("Joatse Cloud email address verification");
 				message.setText(
 						"<h1>Joatse Cloud</h1><p>Please confirm this is your email address and you are creating a Joatse Cloud account by visiting this link:<br /><a href=\""
@@ -156,7 +157,7 @@ public class JoatseLoginController implements InitializingBean {
 		Optional<String> email = Optional.ofNullable(payload.get("email")).map(v -> v.toString());
 		Optional<UUID> token = Optional.ofNullable(payload.get("token")).map(v -> v.toString()).map(u->UUID.fromString(u));
 		Optional<String> password = Optional.ofNullable(payload.get("password")).map(v -> v.toString());
-		if (email.isPresent() && !token.isPresent() && !password.isPresent()) {
+		if (email.isPresent() && token.isEmpty() && password.isEmpty()) {
 			if (asyncEmailSender.isEnabled()) {
 				String emailAddress = email.get();
 				try {
@@ -232,12 +233,14 @@ public class JoatseLoginController implements InitializingBean {
 					oauth2Registrations.put(x.getClientName(), jsonObject);
 					
 					if (registrationId.equals("google")) {
+						log.info("Initializing Google OAuth token verifier for client: {}", x.getClientName());
 						externalTokenVerifiers.put(x, new GoogleTokenVerifier(Collections.singletonList(x.getClientId())));
+						log.info("Google OAuth token verifier initialized successfully");
 					}
 				}
 			}
 		}
-		// System.err.println(oauth2Registrations);
+		log.info("OAuth2 registrations configured: {}", oauth2Registrations.keySet());
 	}
 	
 	private void setupEmailVerification() {

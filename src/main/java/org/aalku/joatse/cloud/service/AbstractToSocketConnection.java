@@ -26,7 +26,6 @@ public abstract class AbstractToSocketConnection {
 	protected static final byte MESSAGE_SOCKET_DATA = 2;
 	protected static final byte MESSAGE_SOCKET_CLOSE = 3;
 	protected static final byte MESSAGE_PUBLIC_KEY = 4;
-	// MESSAGE_FILE_READ_REQUEST (5) is deprecated - use MESSAGE_TYPE_NEW_SOCKET with additionalPayload instead
 	
 	public static final Set<Byte> messageTypesHandled = new HashSet<>(Arrays.asList(MESSAGE_TYPE_NEW_SOCKET, MESSAGE_SOCKET_DATA, MESSAGE_SOCKET_CLOSE));
 	
@@ -45,6 +44,7 @@ public abstract class AbstractToSocketConnection {
 	protected final long targetId;
 	private final CRC32 dataCRCT2W = new CRC32();
 	private final CRC32 dataCRCW2T = new CRC32();	
+	private final AtomicBoolean closed = new AtomicBoolean(false);
 	private final CompletableFuture<Boolean> closeStatus = new CompletableFuture<>();
 	protected final CompletableFuture<Void> connectionToFinalTargetResult = new CompletableFuture<Void>();
 
@@ -121,11 +121,42 @@ public abstract class AbstractToSocketConnection {
 	
 	protected abstract void copyFromClientToTargetForever();
 
-	protected abstract void closeInternal(Throwable e, Boolean b);
+	/**
+	 * Subclasses must implement this method to perform connection-specific cleanup.
+	 * This method is called exactly once when the connection is closing.
+	 * 
+	 * Implementations should:
+	 * - Release any resources (streams, buffers, sockets)
+	 * - NOT call close() or any parent close methods (infinite recursion risk)
+	 * - Be idempotent if possible, though the parent guarantees single execution
+	 * - Complete quickly and not block indefinitely
+	 * 
+	 * @param e The error that caused the close, or null for normal close
+	 * @param remote True if closed by remote side, false if closed locally, null if unknown
+	 */
+	protected abstract void closeInternal(Throwable e, Boolean remote);
 	
 	protected abstract Logger getLog();
 	
+	/**
+	 * Closes this connection with error and remote information.
+	 * This method is protected by CAS to ensure it executes exactly once.
+	 * 
+	 * The close sequence:
+	 * 1. Send close message to WebSocket target
+	 * 2. Call subclass's closeInternal() for cleanup
+	 * 3. Signal closeStatus completion, triggering jSession.remove()
+	 * 
+	 * Subclasses should NOT override this method. Implement closeInternal() instead.
+	 * 
+	 * @param e The error that caused the close, or null for normal close
+	 * @param remote True if closed by remote side, false if closed locally, null if unknown
+	 */
 	public final void close(Throwable e, Boolean remote) {
+		if (!closed.compareAndSet(false, true)) {
+			// Already closed, ignore duplicate close attempt
+			return;
+		}
 		sendLock.lock();
 		try {
 			sendRawMessageToTarget(newTcpSocketCloseMessage()); // Tell WS
@@ -134,7 +165,6 @@ public abstract class AbstractToSocketConnection {
 		}
 		closeInternal(e, remote);
 		signalCloseStatus(e, remote);
-
 	}
 
 	protected abstract Void errorConnectingToFinalTarget(Throwable e);
@@ -208,7 +238,13 @@ public abstract class AbstractToSocketConnection {
 		this.close(null, true);
 	}
 
-	public void close() {
+	/**
+	 * Closes this connection normally (no error, origin unknown).
+	 * This is a convenience method that calls close(null, null).
+	 * 
+	 * Subclasses should NOT override this method.
+	 */
+	public final void close() {
 		close(null, null);
 	}
 

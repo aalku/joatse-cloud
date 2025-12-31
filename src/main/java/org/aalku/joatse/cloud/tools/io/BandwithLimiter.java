@@ -52,7 +52,7 @@ public class BandwithLimiter {
 		}
 		@Override
 		public String toString() {
-			return String.format("bpsCalc[%s bytes, %s millis]=%d bps", bytes, milliseconds, asBps());
+			return "bpsCalc[%s bytes, %s millis]=%d bps".formatted(bytes, milliseconds, asBps());
 		}
 	}
 
@@ -81,7 +81,7 @@ public class BandwithLimiter {
 			Function<Long, Instant> mapNanos = n->Instant.ofEpochMilli(nowM - TimeUnit.NANOSECONDS.toMillis(nowN - n));
 			long end = Optional.ofNullable(endTime.get()).orElse(nowN);
 			long deltaMillis = TimeUnit.NANOSECONDS.toMillis(end - startTime);
-			return String.format("w[%s --> %s ; b = %d, bps = %s]", mapNanos.apply(startTime), mapNanos.apply(end), bytes, deltaMillis == 0L ? 0 : bytes * 1000 / deltaMillis);
+			return "w[%s --> %s ; b = %d, bps = %s]".formatted(mapNanos.apply(startTime), mapNanos.apply(end), bytes, deltaMillis == 0L ? 0 : bytes * 1000 / deltaMillis);
 		}
 	}
 	
@@ -93,7 +93,7 @@ public class BandwithLimiter {
 	
 	private LinkedBlockingDeque<MeasureWindow> windows = new LinkedBlockingDeque<>();
 
-	private long maxPauseNanos = TimeUnit.SECONDS.toNanos(20); // A lot
+	private long maxPauseNanos = TimeUnit.SECONDS.toNanos(5); // A lot
 
 	public Long getLimitBps() {
 		return Optional.of(limitBps.get()).filter(n -> n > 0L).orElse(null);
@@ -195,7 +195,7 @@ public class BandwithLimiter {
 				long millis = TimeUnit.NANOSECONDS.toMillis(now - oldestTime);
 				if (log.isDebugEnabled()) {
 					long bps = bytes <= 0 ? 0 : millis <= 0 ? 0 : bytes * 8 * 1000 / millis;
-					log.debug(String.format("bits=%s, s=%.3f, c=%d, bps = %d", bytes * 8, millis / 1000d, c, bps));
+					log.debug("bits=%s, s=%.3f, c=%d, bps = %d".formatted(bytes * 8, millis / 1000d, c, bps));
 				}
 				return new BpsCalc(bytes, millis);
 			}

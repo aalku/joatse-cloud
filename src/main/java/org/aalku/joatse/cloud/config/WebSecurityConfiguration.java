@@ -12,7 +12,7 @@ import org.json.JSONObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.web.context.WebServerInitializedEvent;
+import org.springframework.boot.web.server.context.WebServerInitializedEvent;
 import org.springframework.context.ApplicationListener;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -52,9 +52,10 @@ public class WebSecurityConfiguration {
 	
 	@SuppressWarnings("unused")
 	private Logger log = LoggerFactory.getLogger(WebSecurityConfiguration.class);
-	
-	@Bean // Must be public
-	public ApplicationListener<WebServerInitializedEvent> webInitializedListener() {
+
+	// Must be public
+	@Bean
+	ApplicationListener<WebServerInitializedEvent> webInitializedListener() {
 		return new ApplicationListener<WebServerInitializedEvent>() {
 			
 			@Override
@@ -69,14 +70,13 @@ public class WebSecurityConfiguration {
 	
 	@Autowired
 	private UserManager userManager;
-	
+
 	/**
 	 * AuthenticationManager bean for programmatic authentication in REST API
 	 */
 	@Bean
-	public AuthenticationManager authenticationManager(UserManager userManager) throws Exception {
-		DaoAuthenticationProvider authProvider = new DaoAuthenticationProvider();
-		authProvider.setUserDetailsService(userManager.userDetailsService());
+	AuthenticationManager authenticationManager(UserManager userManager) throws Exception {
+		DaoAuthenticationProvider authProvider = new DaoAuthenticationProvider(userManager.userDetailsService());
 		authProvider.setPasswordEncoder(PasswordEncoderFactories.createDelegatingPasswordEncoder());
 		return new ProviderManager(authProvider);
 	}

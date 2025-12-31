@@ -51,7 +51,7 @@ class rewriteTest {
 	private String replaceAll(ByteArrayOutputStream baos, PrintWriter out, String contentString, int bufferSize,
 			String regex, Function<String, String> replace) {
 		System.out.println(
-				String.format("Replacing %s->%s on %s with buffer size %d", regex, replace, contentString, bufferSize));
+				"Replacing %s->%s on %s with buffer size %d".formatted(regex, replace, contentString, bufferSize));
 		CharBuffer contentSource = CharBuffer.wrap(contentString);
 		CharBuffer buffer = CharBuffer.allocate(bufferSize);
 		Pattern pattern = Pattern.compile(regex);

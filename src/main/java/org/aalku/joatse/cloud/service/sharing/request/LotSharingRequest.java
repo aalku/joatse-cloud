@@ -3,6 +3,7 @@ package org.aalku.joatse.cloud.service.sharing.request;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.MalformedURLException;
+import java.net.URI;
 import java.net.URL;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -67,8 +68,7 @@ public class LotSharingRequest {
 		return allowedAddressRanges.stream()
 				.filter(AddressRange::isExact)
 				.map(AddressRange::toInetAddress)
-				.filter(Optional::isPresent)
-				.map(Optional::get)
+				.flatMap(Optional::stream)
 				.collect(Collectors.toSet());
 	}
 
@@ -103,6 +103,7 @@ public class LotSharingRequest {
 		Optional<TunnelRequestTcpItem> socks5TunnelReq = fromJsonSocks5Tunnel(js);
 		Collection<TunnelRequestCommandItem> commandTunnelReqs = fromJsonCommandTunnels(js);
 		Collection<TunnelRequestFileItem> fileTunnelReqs = fromJsonFileTunnels(js);
+		Collection<TunnelRequestFolderItem> folderTunnelReqs = fromJsonFolderTunnels(js);
 		
 		Collection<TunnelRequestItem> items = new ArrayList<TunnelRequestItem>();
 		socks5TunnelReq.ifPresent(x->items.add(x));
@@ -110,6 +111,7 @@ public class LotSharingRequest {
 		items.addAll(httpTunnelReqs);
 		items.addAll(commandTunnelReqs);
 		items.addAll(fileTunnelReqs);
+		items.addAll(folderTunnelReqs);
 		return items;
 	}
 
@@ -145,7 +147,7 @@ public class LotSharingRequest {
 			JSONObject jo = (JSONObject) o;
 			long targetId = jo.optLong("targetId");
 			String targetDescription = jo.optString("targetDescription");
-			URL targetUrl = new URL(jo.optString("targetUrl"));
+			URL targetUrl = URI.create(jo.optString("targetUrl")).toURL();
 			boolean unsafe = jo.optBoolean("unsafe", false);
 			boolean hideProxy = jo.optBoolean("hideProxy", false);
 			// Generate default description if not provided
@@ -162,9 +164,26 @@ public class LotSharingRequest {
 			long targetId = jo.optLong("targetId");
 			String targetDescription = jo.optString("targetDescription");
 			String targetPath = jo.getString("targetPath");
+			String targetFileName = jo.getString("targetFileName");
 			// Generate default description if not provided
 			String finalDescription = TunnelDescriptionUtils.getDefaultFileDescription(targetDescription, targetPath);
-			items.add(new TunnelRequestFileItem(targetId, finalDescription, targetPath));
+			items.add(new TunnelRequestFileItem(targetId, finalDescription, targetPath, targetFileName));
+		}
+		return items;
+	}
+
+	private static Collection<TunnelRequestFolderItem> fromJsonFolderTunnels(JSONObject js) {
+		Collection<TunnelRequestFolderItem> items = new ArrayList<>();
+		for (Object o: Optional.ofNullable(js.optJSONArray("folderTunnels")).orElseGet(()->new JSONArray())) {
+			JSONObject jo = (JSONObject) o;
+			long targetId = jo.optLong("targetId");
+			String targetDescription = jo.optString("targetDescription");
+			String targetPath = jo.getString("targetPath");
+			// Default to read-only for safety if not specified
+			boolean readOnly = jo.optBoolean("readOnly", true);
+			// Generate default description if not provided
+			String finalDescription = TunnelDescriptionUtils.getDefaultFolderDescription(targetDescription, targetPath);
+			items.add(new TunnelRequestFolderItem(targetId, finalDescription, targetPath, readOnly));
 		}
 		return items;
 	}

@@ -86,7 +86,7 @@ public class ConfirmController {
 	 * If logged it then skip to CF/3, else redirect to login after saving the hash
 	 */
 	@PostMapping("/CF/2")
-	public View confirm2(HttpServletRequest request, @RequestParam(required = true, name = "hash") String hash) {
+	public View confirm2(HttpServletRequest request, @RequestParam(required = true) String hash) {
 		
 		//log.info("confirm2");
 		request.getSession(true).setAttribute(CONFIRM_SESSION_KEY_HASH, new HashContainer(hash));

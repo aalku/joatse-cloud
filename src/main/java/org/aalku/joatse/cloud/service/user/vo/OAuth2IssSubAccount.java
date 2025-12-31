@@ -1,5 +1,6 @@
 package org.aalku.joatse.cloud.service.user.vo;
 
+import java.io.Serial;
 import java.io.Serializable;
 import java.util.UUID;
 
@@ -20,6 +21,7 @@ import jakarta.persistence.UniqueConstraint;
 @Table(uniqueConstraints = @UniqueConstraint(columnNames = { "iss", "sub" }))
 public class OAuth2IssSubAccount implements Serializable {
 
+	@Serial
 	private static final long serialVersionUID = 1L;
 
 	public static OAuth2IssSubAccount create(JoatseUser user, String iss, String sub) {

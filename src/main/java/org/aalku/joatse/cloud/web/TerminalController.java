@@ -146,9 +146,9 @@ public class TerminalController extends AbstractWebSocketHandler {
 				Encoder encoder = Base64.getEncoder();
 				TerminalUpdateListener eventHandler = (targetEvent)->{
 					JSONObject o = new JSONObject();
-					if (targetEvent instanceof BytesEvent) {
+					if (targetEvent instanceof BytesEvent bytesEvent) {
 						o.put("cause", "update");
-						o.put("b64", encoder.encodeToString(((BytesEvent)targetEvent).bytes));
+						o.put("b64", encoder.encodeToString(bytesEvent.bytes));
 					} else if (targetEvent instanceof EofEvent) {
 						o.put("cause", "EOF");
 					}

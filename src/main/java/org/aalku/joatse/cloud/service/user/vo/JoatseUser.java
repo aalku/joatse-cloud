@@ -1,5 +1,6 @@
 package org.aalku.joatse.cloud.service.user.vo;
 
+import java.io.Serial;
 import java.io.Serializable;
 import java.util.Collection;
 import java.util.LinkedHashMap;
@@ -59,6 +60,7 @@ public class JoatseUser implements UserDetails, Serializable {
 		return Objects.equals(getUuid(), other.getUuid());
 	}
 
+	@Serial
 	private static final long serialVersionUID = 1L;
 
 	/**

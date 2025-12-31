@@ -54,7 +54,7 @@ public interface IOTools {
 		for (int i = aStart; i < aEnd; i++) {
 			sb.append(':');
 			byte c = a[i];
-			sb.append(String.format("%02x", c & 0xFF));
+			sb.append("%02x".formatted(c & 0xFF));
 		}
 		return sb.toString().substring(1);
 	}

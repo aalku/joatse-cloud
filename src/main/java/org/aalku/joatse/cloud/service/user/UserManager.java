@@ -1,6 +1,7 @@
 package org.aalku.joatse.cloud.service.user;
 
 import java.net.MalformedURLException;
+import java.net.URI;
 import java.net.URL;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
@@ -90,8 +91,8 @@ public class UserManager {
 		JoatseUser res = null;
 		Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
 		Object principal = authentication.getPrincipal();
-		if (principal instanceof JoatseUser) {
-			res = (JoatseUser) principal;
+		if (principal instanceof JoatseUser user) {
+			res = user;
 		} else if (principal instanceof Supplier<?>) {
 			res = ((Supplier<JoatseUser>)principal).get();
 		}
@@ -263,7 +264,7 @@ public class UserManager {
 	
 	public String newPasswordResetLink(JoatseUser user, String linkBaseUrl) {
 		try {
-			return new URL(new URL(linkBaseUrl), WebSecurityConfiguration.PATH_PASSWORD_RESET + "?token=" + newPasswordResetToken(user)).toExternalForm();
+			return new URL(URI.create(linkBaseUrl).toURL(), WebSecurityConfiguration.PATH_PASSWORD_RESET + "?token=" + newPasswordResetToken(user)).toExternalForm();
 		} catch (MalformedURLException e) {
 			throw new RuntimeException("Error creating password reset link", e); // Unexpected
 		}

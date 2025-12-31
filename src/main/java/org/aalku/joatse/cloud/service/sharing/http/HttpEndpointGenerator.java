@@ -193,4 +193,52 @@ public class HttpEndpointGenerator {
 		}
 	}
 
+	public ListenAddress generateListenAddressForFolder(org.aalku.joatse.cloud.service.sharing.folder.FolderTunnel tunnel, 
+			LinkedHashSet<ListenAddress> forbiddenAddresses) {
+		// Folders use the same port range as HTTP tunnels
+		String protocol = listenerConfigurationDetector.isSslEnabled() ? "https" : "http";
+		for (int p = httpPortRange.min(); p <= httpPortRange.max(); p++) {
+			for (String host : httpHosts) {
+				ListenAddress a;
+				if (host.startsWith(DYNAMIC_PREFIX)) {
+					a = new ListenAddress(p, generatePrefixForFolder(tunnel) + "." + host.substring(DYNAMIC_PREFIX.length()), protocol);
+				} else {
+					a = new ListenAddress(p, host, protocol);
+				}
+				if (!forbiddenAddresses.contains(a)) {
+					return a;
+				}
+			}
+		}
+		throw new RuntimeException("Not enough http(s) ports or host names (" + httpPortRange.count() + "x"
+				+ httpHosts.size() + ") for this share size");
+	}
+	
+	private String generatePrefixForFolder(org.aalku.joatse.cloud.service.sharing.folder.FolderTunnel tunnel) {
+		String prefixBase = cleanString(tunnel.getTargetDescription());
+		return prefixBase + "-" + generateHashPrefixForFolder(tunnel, this.prefixHashLength);
+	}
+	
+	private static String generateHashPrefixForFolder(org.aalku.joatse.cloud.service.sharing.folder.FolderTunnel tunnel, int hashLength) {
+		try {
+			MessageDigest md = MessageDigest.getInstance("SHA-1");
+			md.update(tunnel.getSharedResourceLot().getRequesterAddress().getAddress().getAddress());
+			md.update(tunnel.getTargetPath().getBytes(StandardCharsets.UTF_8));
+			md.update((byte)(tunnel.isReadOnly() ? 1 : 0));
+			byte[] digest = md.digest();
+			if (hashLength > digest.length) {
+				throw new IllegalArgumentException("Selected hash algorithm can only generate " + digest.length + " chars");
+			}
+			StringBuilder sb = new StringBuilder(2);
+			final String dictionary = "abcdefghmprstxyz"; 
+			for (int i = 0; i < hashLength; i++) {
+				char c = dictionary.charAt(digest[i] & 0x0F);
+				sb.append(c);
+			}
+			return sb.toString();
+		} catch (NoSuchAlgorithmException e) {
+			throw new RuntimeException(e);
+		}
+	}
+
 }

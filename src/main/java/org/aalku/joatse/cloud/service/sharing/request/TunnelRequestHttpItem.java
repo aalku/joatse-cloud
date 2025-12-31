@@ -23,8 +23,7 @@ public class TunnelRequestHttpItem extends TunnelRequestItem {
 	
 	@Override
 	public boolean equals(TunnelRequestItem o) {
-		if (o instanceof TunnelRequestHttpItem) {
-			TunnelRequestHttpItem c = (TunnelRequestHttpItem) o;
+		if (o instanceof TunnelRequestHttpItem c) {
 			if (
 					Objects.equals(c.targetDescription, this.targetDescription)
 					&& Objects.equals(c.targetHostname, this.targetHostname)
